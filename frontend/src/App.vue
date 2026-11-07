@@ -2,6 +2,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Line } from 'vue-chartjs'
+import Factory3D from './components/Factory3D.vue'
+
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -23,6 +25,10 @@ ChartJS.register(
   Filler
 )
 
+// =====================================
+// TIPOS
+// =====================================
+
 type DeviceEvent = {
   event_id?: string
   device_id: string
@@ -31,8 +37,23 @@ type DeviceEvent = {
   payload: Record<string, number | boolean>
 }
 
+type HistoryPoint = {
+  time: string
+  motor: number
+  vibration: number
+  environment: number | null
+}
+
+// =====================================
+// CONFIGURAÇÕES
+// =====================================
+
 const API_URL = 'http://localhost:8000'
 const WS_URL = 'ws://localhost:8000/ws/factory'
+
+// =====================================
+// ESTADOS
+// =====================================
 
 const devices = ref<Record<string, DeviceEvent>>({})
 const connected = ref(false)
@@ -40,17 +61,16 @@ const commandLoading = ref(false)
 const feedback = ref('')
 const now = ref(Date.now())
 
-const history = ref<{
-  time: string
-  motor: number
-  vibration: number
-  environment: number | null
-}[]>([])
+const history = ref<HistoryPoint[]>([])
 
 let socket: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let active = true
+
+// =====================================
+// DISPOSITIVOS
+// =====================================
 
 const motor = computed(
   () => devices.value['motor-01']?.payload
@@ -68,6 +88,10 @@ const fan = computed(
   () => devices.value['fan-01']?.payload.running === true
 )
 
+// =====================================
+// CONEXÃO E ATUALIZAÇÃO
+// =====================================
+
 const lastUpdate = computed(() => {
   const timestamps = Object.values(devices.value)
     .map(device => new Date(device.timestamp).getTime())
@@ -84,6 +108,18 @@ const online = computed(
     lastUpdate.value > 0 &&
     now.value - lastUpdate.value < 12000
 )
+
+const lastUpdateText = computed(() => {
+  if (!lastUpdate.value) {
+    return 'Aguardando dados...'
+  }
+
+  return new Date(lastUpdate.value).toLocaleTimeString('pt-BR')
+})
+
+// =====================================
+// VALORES DOS SENSORES
+// =====================================
 
 const temperature = computed(
   () => Number(motor.value?.temperature_c ?? 0)
@@ -105,14 +141,59 @@ const humidity = computed(
   () => Number(environment.value?.humidity_percent ?? 0)
 )
 
+const motorRunning = computed(
+  () => motor.value?.running === true
+)
+
+// =====================================
+// ESTADO VISUAL DO MOTOR
+// =====================================
+
+const motorStatus = computed(() => {
+  if (!online.value) {
+    return 'Sem dados'
+  }
+
+  if (!motorRunning.value) {
+    return 'Desligado'
+  }
+
+  if (temperature.value >= 85) {
+    return 'Temperatura crítica'
+  }
+
+  if (temperature.value >= 70) {
+    return 'Temperatura elevada'
+  }
+
+  return 'Operação normal'
+})
+
+const motorStatusClass = computed(() => {
+  if (!online.value) return 'neutral'
+  if (!motorRunning.value) return 'neutral'
+  if (temperature.value >= 85) return 'danger'
+  if (temperature.value >= 70) return 'warning'
+  return 'success'
+})
+
+// =====================================
+// GRÁFICO DE TEMPERATURA
+// =====================================
+
 const temperatureChart = computed(() => ({
   labels: history.value.map(item => item.time),
+
   datasets: [
     {
       label: 'Motor (°C)',
-      data: history.value.map(item => item.motor),
+
+      data: history.value.map(
+        item => item.motor
+      ),
+
       borderColor: '#38bdf8',
-      backgroundColor: 'rgba(56, 189, 248, 0.10)',
+      backgroundColor: 'rgba(56,189,248,0.12)',
       borderWidth: 2,
       pointRadius: 0,
       tension: 0.3,
@@ -120,8 +201,13 @@ const temperatureChart = computed(() => ({
     },
     {
       label: 'Ambiente (°C)',
-      data: history.value.map(item => item.environment),
+
+      data: history.value.map(
+        item => item.environment
+      ),
+
       borderColor: '#34d399',
+      backgroundColor: 'rgba(52,211,153,0.05)',
       borderWidth: 2,
       pointRadius: 0,
       tension: 0.3,
@@ -130,14 +216,23 @@ const temperatureChart = computed(() => ({
   ]
 }))
 
+// =====================================
+// GRÁFICO DE VIBRAÇÃO
+// =====================================
+
 const vibrationChart = computed(() => ({
   labels: history.value.map(item => item.time),
+
   datasets: [
     {
       label: 'Vibração (mm/s)',
-      data: history.value.map(item => item.vibration),
+
+      data: history.value.map(
+        item => item.vibration
+      ),
+
       borderColor: '#f59e0b',
-      backgroundColor: 'rgba(245, 158, 11, 0.12)',
+      backgroundColor: 'rgba(245,158,11,0.12)',
       borderWidth: 2,
       pointRadius: 0,
       tension: 0.3,
@@ -150,6 +245,7 @@ const chartOptions = {
   responsive: true,
   maintainAspectRatio: false,
   animation: false as const,
+
   plugins: {
     legend: {
       display: true,
@@ -158,6 +254,7 @@ const chartOptions = {
       }
     }
   },
+
   scales: {
     x: {
       ticks: {
@@ -165,28 +262,39 @@ const chartOptions = {
         maxTicksLimit: 6
       },
       grid: {
-        color: 'rgba(148, 163, 184, 0.08)'
+        color: 'rgba(148,163,184,0.08)'
       }
     },
+
     y: {
       ticks: {
         color: '#94a3b8'
       },
       grid: {
-        color: 'rgba(148, 163, 184, 0.1)'
+        color: 'rgba(148,163,184,0.1)'
       }
     }
   }
 }
 
+// =====================================
+// RECEBER EVENTOS
+// =====================================
+
 function addEvent(event: DeviceEvent) {
   const previous = devices.value[event.device_id]
 
-  if (previous && event.timestamp < previous.timestamp) {
+  if (
+    previous &&
+    event.timestamp < previous.timestamp
+  ) {
     return
   }
 
   devices.value[event.device_id] = event
+
+  // Atualiza o histórico apenas quando
+  // chega uma leitura nova do motor.
 
   if (
     event.device_id === 'motor-01' &&
@@ -194,7 +302,7 @@ function addEvent(event: DeviceEvent) {
   ) {
     const payload = event.payload
 
-    const newPoint = {
+    const point: HistoryPoint = {
       time: new Date(event.timestamp)
         .toLocaleTimeString('pt-BR'),
 
@@ -214,13 +322,18 @@ function addEvent(event: DeviceEvent) {
         : null
     }
 
-    history.value.push(newPoint)
+    history.value.push(point)
 
+    // Mantém somente as últimas 30 leituras.
     if (history.value.length > 30) {
       history.value.shift()
     }
   }
 }
+
+// =====================================
+// WEBSOCKET
+// =====================================
 
 function connectWebSocket() {
   if (!active) return
@@ -232,7 +345,7 @@ function connectWebSocket() {
     feedback.value = ''
   }
 
-  socket.onmessage = (message) => {
+  socket.onmessage = message => {
     try {
       const data = JSON.parse(message.data)
 
@@ -245,7 +358,10 @@ function connectWebSocket() {
         addEvent(data as DeviceEvent)
       }
     } catch (error) {
-      console.error('Evento inválido:', error)
+      console.error(
+        'Erro ao receber evento:',
+        error
+      )
     }
   }
 
@@ -265,8 +381,17 @@ function connectWebSocket() {
   }
 }
 
-async function sendCommand(action: 'ON' | 'OFF') {
-  if (commandLoading.value || !online.value) {
+// =====================================
+// CONTROLE DA ESTEIRA
+// =====================================
+
+async function sendCommand(
+  action: 'ON' | 'OFF'
+) {
+  if (
+    commandLoading.value ||
+    !online.value
+  ) {
     return
   }
 
@@ -278,15 +403,21 @@ async function sendCommand(action: 'ON' | 'OFF') {
       `${API_URL}/api/conveyor/command`,
       {
         method: 'POST',
+
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ action })
+
+        body: JSON.stringify({
+          action
+        })
       }
     )
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
+      throw new Error(
+        `Erro HTTP ${response.status}`
+      )
     }
 
     feedback.value =
@@ -296,11 +427,16 @@ async function sendCommand(action: 'ON' | 'OFF') {
     console.error(error)
 
     feedback.value =
-      'Erro ao enviar o comando. Confira a API.'
+      'Erro ao enviar comando. ' +
+      'Verifique a conexão com a API.'
   } finally {
     commandLoading.value = false
   }
 }
+
+// =====================================
+// FORMATAÇÃO
+// =====================================
 
 function formatNumber(
   value: number,
@@ -310,6 +446,10 @@ function formatNumber(
     .toFixed(digits)
     .replace('.', ',')
 }
+
+// =====================================
+// CICLO DE VIDA
+// =====================================
 
 onMounted(() => {
   active = true
@@ -334,13 +474,17 @@ onUnmounted(() => {
 <template>
   <div class="dashboard">
 
+    <!-- CABEÇALHO -->
+
     <header class="header">
       <div>
         <div class="eyebrow">
           SMART FACTORY AIoT
         </div>
 
-        <h1>Centro de Controle Industrial</h1>
+        <h1>
+          Centro de Controle Industrial
+        </h1>
 
         <p>
           Monitoramento inteligente de equipamentos
@@ -363,8 +507,13 @@ onUnmounted(() => {
     </header>
 
     <main>
+
+      <!-- VISÃO GERAL -->
+
       <section class="section-heading">
-        <h2>Visão geral da fábrica</h2>
+        <h2>
+          Visão geral da fábrica
+        </h2>
 
         <span>
           Dados recebidos via MQTT,
@@ -372,7 +521,10 @@ onUnmounted(() => {
         </span>
       </section>
 
+      <!-- INDICADORES -->
+
       <div class="metrics">
+
         <article class="metric">
           <div class="metric-label">
             Temperatura do motor
@@ -433,9 +585,13 @@ onUnmounted(() => {
             {{ formatNumber(humidity) }}%
           </span>
         </article>
+
       </div>
 
+      <!-- GRÁFICOS -->
+
       <div class="content-grid">
+
         <section class="panel">
           <div class="panel-header">
             <h2>
@@ -457,9 +613,13 @@ onUnmounted(() => {
 
         <section class="panel">
           <div class="panel-header">
-            <h2>Vibração do motor</h2>
+            <h2>
+              Vibração do motor
+            </h2>
 
-            <span>mm/s</span>
+            <span>
+              mm/s
+            </span>
           </div>
 
           <div class="chart-area">
@@ -469,10 +629,50 @@ onUnmounted(() => {
             />
           </div>
         </section>
+
       </div>
 
+      <!-- ESTADO DO MOTOR -->
+
+      <section class="panel motor-panel">
+        <div class="motor-panel-content">
+          <div>
+            <h2>
+              Monitoramento do motor
+            </h2>
+
+            <p>
+              Estado operacional baseado nos
+              sensores simulados.
+            </p>
+          </div>
+
+          <span
+            class="motor-badge"
+            :class="motorStatusClass"
+          >
+            {{ motorStatus }}
+          </span>
+        </div>
+
+        <div class="motor-panel-footer">
+          <span>
+            Última leitura:
+            {{ lastUpdateText }}
+          </span>
+
+          <span>
+            Limites de temperatura ilustrativos
+          </span>
+        </div>
+      </section>
+
+      <!-- EQUIPAMENTOS -->
+
       <section class="section-heading">
-        <h2>Equipamentos e atuadores</h2>
+        <h2>
+          Equipamentos e atuadores
+        </h2>
 
         <span>
           Estado recebido diretamente
@@ -481,6 +681,9 @@ onUnmounted(() => {
       </section>
 
       <div class="devices-grid">
+
+        <!-- ESTEIRA -->
+
         <article class="panel device">
           <div class="device-top">
             <div class="device-icon">
@@ -506,7 +709,8 @@ onUnmounted(() => {
           </h3>
 
           <p>
-            Controle remoto via RabbitMQ e MQTT
+            Controle remoto via
+            RabbitMQ e MQTT
           </p>
 
           <div class="buttons">
@@ -535,6 +739,8 @@ onUnmounted(() => {
           </p>
         </article>
 
+        <!-- VENTILADOR -->
+
         <article class="panel device">
           <div class="device-top">
             <div class="device-icon">
@@ -561,7 +767,7 @@ onUnmounted(() => {
 
           <p>
             Atuador controlado automaticamente
-            pela temperatura ambiente
+            pela temperatura ambiente.
           </p>
 
           <div class="rule">
@@ -569,12 +775,38 @@ onUnmounted(() => {
             Desliga abaixo de 30 °C
           </div>
         </article>
+
       </div>
 
+      <!-- GÊMEO DIGITAL 3D -->
+
+      <section class="section-heading section-3d">
+        <h2>
+          Visualização industrial 3D
+        </h2>
+
+        <span>
+          Equipamentos conectados ao WebSocket
+        </span>
+      </section>
+
+      <Factory3D
+        :conveyor-on="conveyor"
+        :fan-on="fan"
+        :motor-temperature="temperature"
+        :vibration="vibration"
+        :ambient-temperature="ambient"
+        :humidity="humidity"
+        :online="online"
+      />
+
+      <!-- RODAPÉ -->
+
       <footer>
-        Smart Factory AIoT · Vue 3 · FastAPI ·
-        RabbitMQ · MQTT · InfluxDB
+        Smart Factory AIoT · Vue 3 · Three.js ·
+        FastAPI · RabbitMQ · MQTT · InfluxDB
       </footer>
+
     </main>
   </div>
 </template>
@@ -600,6 +832,8 @@ button {
   margin: 0 auto;
   padding: 32px;
 }
+
+/* CABEÇALHO */
 
 .header {
   display: flex;
@@ -633,7 +867,8 @@ h3 {
 }
 
 .header p,
-.device p {
+.device p,
+.motor-panel p {
   color: #94a3b8;
   margin: 0;
 }
@@ -661,6 +896,8 @@ h3 {
   margin-right: 6px;
 }
 
+/* SEÇÕES */
+
 .section-heading {
   display: flex;
   align-items: center;
@@ -674,6 +911,8 @@ h3 {
   color: #64748b;
   font-size: 12px;
 }
+
+/* INDICADORES */
 
 .metrics {
   display: grid;
@@ -712,11 +951,13 @@ h3 {
   font-size: 12px;
 }
 
+/* GRÁFICOS */
+
 .content-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  margin-bottom: 36px;
+  margin-bottom: 32px;
 }
 
 .panel-header {
@@ -730,10 +971,74 @@ h3 {
   height: 270px;
 }
 
+/* MONITORAMENTO DO MOTOR */
+
+.motor-panel {
+  margin-bottom: 36px;
+}
+
+.motor-panel-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+
+.motor-panel-content h2 {
+  margin-bottom: 8px;
+}
+
+.motor-panel-content p {
+  font-size: 13px;
+}
+
+.motor-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 9px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.motor-badge.success {
+  background: #123b31;
+  color: #6ee7b7;
+}
+
+.motor-badge.warning {
+  background: #42331d;
+  color: #fbbf24;
+}
+
+.motor-badge.danger {
+  background: #42272b;
+  color: #fda4af;
+}
+
+.motor-badge.neutral {
+  background: #334155;
+  color: #cbd5e1;
+}
+
+.motor-panel-footer {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 22px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+/* EQUIPAMENTOS */
+
 .devices-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+  margin-bottom: 36px;
 }
 
 .device-top {
@@ -787,8 +1092,16 @@ h3 {
   background: #059669;
 }
 
+.btn-green:hover:not(:disabled) {
+  background: #047857;
+}
+
 .btn-red {
   background: #dc2626;
+}
+
+.btn-red:hover:not(:disabled) {
+  background: #b91c1c;
 }
 
 button:disabled {
@@ -810,12 +1123,22 @@ button:disabled {
   color: #38bdf8 !important;
 }
 
+/* GÊMEO DIGITAL */
+
+.section-3d {
+  margin-top: 36px;
+}
+
+/* RODAPÉ */
+
 footer {
   text-align: center;
   color: #64748b;
-  padding: 40px 0 10px;
+  padding: 25px 0 10px;
   font-size: 12px;
 }
+
+/* RESPONSIVIDADE */
 
 @media (max-width: 950px) {
   .metrics {
@@ -849,6 +1172,11 @@ footer {
 
   .metric-value {
     font-size: 25px;
+  }
+
+  .motor-panel-content {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>
