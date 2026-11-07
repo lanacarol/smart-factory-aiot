@@ -1,0 +1,10 @@
+
+user simulator
+topic write factory/+/+/telemetry
+topic write factory/+/+/state
+topic read factory/+/+/command
+
+user gateway
+topic read factory/+/+/telemetry
+topic read factory/+/+/state
+topic write factory/+/+/command

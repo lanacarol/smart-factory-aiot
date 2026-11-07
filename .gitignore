@@ -11,3 +11,4 @@ dist/
 *.log
 ai/datasets/
 ai/models/
+infra/mosquitto/passwords
