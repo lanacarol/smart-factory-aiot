@@ -12,3 +12,4 @@ dist/
 ai/datasets/
 ai/models/
 infra/mosquitto/passwords
+simulator/main_backup.py
