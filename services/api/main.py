@@ -1,32 +1,57 @@
 
-import asyncio
 import json
 import logging
 import os
 import uuid
 
 from contextlib import asynccontextmanager
+from typing import Literal
 
 import aio_pika
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect
+)
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Literal
 from pydantic import BaseModel
 
+
+# ==========================================
+# CONFIGURACOES
+# ==========================================
+
 logging.basicConfig(level=logging.INFO)
+
 logger = logging.getLogger("smart-factory-api")
 
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+RABBITMQ_HOST = os.getenv(
+    "RABBITMQ_HOST",
+    "rabbitmq"
+)
+
 RABBITMQ_USER = os.environ["RABBITMQ_USER"]
 RABBITMQ_PASSWORD = os.environ["RABBITMQ_PASSWORD"]
 
 EXCHANGE = "factory.topic"
 QUEUE = "q.telemetry.websocket"
 
+
+# ==========================================
+# ESTADO ATUAL DA FABRICA
+# ==========================================
+
 latest_events = {}
+latest_predictions = {}
+
 websocket_clients = set()
 
+
+# ==========================================
+# ENVIO EM TEMPO REAL
+# ==========================================
 
 async def broadcast(event):
     disconnected = []
@@ -34,6 +59,7 @@ async def broadcast(event):
     for websocket in list(websocket_clients):
         try:
             await websocket.send_json(event)
+
         except Exception:
             disconnected.append(websocket)
 
@@ -41,38 +67,97 @@ async def broadcast(event):
         websocket_clients.discard(websocket)
 
 
+# ==========================================
+# PROCESSAMENTO DE EVENTOS
+# ==========================================
+
 async def process_event(message):
     async with message.process():
         try:
-            event = json.loads(message.body.decode("utf-8"))
+            event = json.loads(
+                message.body.decode("utf-8")
+            )
+
+            if not isinstance(event, dict):
+                logger.warning("Evento invalido")
+                return
 
             device_id = event.get("device_id")
             event_type = event.get("type")
+            payload = event.get("payload")
 
             if not isinstance(device_id, str):
                 logger.warning("Evento sem device_id")
                 return
 
-            if event_type not in ("telemetry", "state"):
-                logger.warning("Tipo desconhecido: %s", event_type)
-                return
-
-            if not isinstance(event.get("payload"), dict):
+            if not isinstance(payload, dict):
                 logger.warning("Payload invalido")
                 return
 
-            previous = latest_events.get(device_id)
-            if previous and event.get("timestamp", "") < previous.get("timestamp", ""):
+            if event_type not in (
+                "telemetry",
+                "state",
+                "prediction"
+            ):
+                logger.warning(
+                    "Tipo desconhecido: %s",
+                    event_type
+                )
                 return
 
-            latest_events[device_id] = event
+            if event_type == "prediction":
+                previous = latest_predictions.get(
+                    device_id
+                )
+
+                if (
+                    previous
+                    and event.get("timestamp", "")
+                    < previous.get("timestamp", "")
+                ):
+                    return
+
+                latest_predictions[device_id] = event
+
+                logger.info(
+                    "Previsao recebida | %s | "
+                    "RUL: %s | Saude: %s%%",
+                    device_id,
+                    payload.get("rul_cycles"),
+                    payload.get("health_percent")
+                )
+
+            else:
+                previous = latest_events.get(
+                    device_id
+                )
+
+                if (
+                    previous
+                    and event.get("timestamp", "")
+                    < previous.get("timestamp", "")
+                ):
+                    return
+
+                latest_events[device_id] = event
 
             if websocket_clients:
                 await broadcast(event)
 
-        except (ValueError, UnicodeDecodeError) as error:
-            logger.warning("Mensagem invalida: %s", error)
+        except (
+            ValueError,
+            UnicodeDecodeError,
+            TypeError
+        ) as error:
+            logger.warning(
+                "Mensagem invalida: %s",
+                error
+            )
 
+
+# ==========================================
+# INICIALIZACAO DO RABBITMQ
+# ==========================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -101,8 +186,23 @@ async def lifespan(app: FastAPI):
         durable=True
     )
 
-    await queue.bind(exchange, routing_key="telemetry.#")
-    await queue.bind(exchange, routing_key="state.#")
+    # Leituras dos sensores.
+    await queue.bind(
+        exchange,
+        routing_key="telemetry.#"
+    )
+
+    # Estados dos equipamentos.
+    await queue.bind(
+        exchange,
+        routing_key="state.#"
+    )
+
+    # Previsoes produzidas pela IA.
+    await queue.bind(
+        exchange,
+        routing_key="prediction.#"
+    )
 
     await queue.consume(process_event)
 
@@ -112,21 +212,31 @@ async def lifespan(app: FastAPI):
 
     logger.info("API conectada ao RabbitMQ")
     logger.info("Consumindo %s", QUEUE)
+    logger.info(
+        "Telemetria, estados e previsoes habilitados"
+    )
 
     try:
         yield
+
     finally:
         await connection.close()
 
 
+# ==========================================
+# FASTAPI
+# ==========================================
+
 app = FastAPI(
     title="Smart Factory AIoT",
-    version="0.1.0",
-    description="API de monitoramento da fabrica inteligente",
+    version="0.2.0",
+    description=(
+        "API da fabrica inteligente com "
+        "manutencao preditiva"
+    ),
     lifespan=lifespan
 )
 
-# Acesso local durante o desenvolvimento.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -143,21 +253,32 @@ class ConveyorCommand(BaseModel):
     action: Literal["ON", "OFF"]
 
 
+# ==========================================
+# ROTAS REST
+# ==========================================
+
 @app.get("/")
 async def home():
     return {
         "name": "Smart Factory AIoT",
         "status": "online",
-        "docs": "/docs"
+        "docs": "/docs",
+        "ai_enabled": True
     }
 
 
 @app.get("/health")
 async def health():
-    connected = not app.state.connection.is_closed
+    connected = (
+        hasattr(app.state, "connection")
+        and not app.state.connection.is_closed
+    )
 
     if not connected:
-        raise HTTPException(503, "RabbitMQ desconectado")
+        raise HTTPException(
+            503,
+            "RabbitMQ desconectado"
+        )
 
     return {
         "status": "ok",
@@ -169,12 +290,42 @@ async def health():
 async def factory_state():
     return {
         "devices": latest_events,
+        "predictions": latest_predictions,
         "total_devices": len(latest_events)
     }
 
 
+@app.get("/api/ai/predictions")
+async def ai_predictions():
+    return {
+        "predictions": latest_predictions,
+        "total": len(latest_predictions)
+    }
+
+
+@app.get("/api/ai/predictions/{device_id}")
+async def ai_prediction_device(device_id: str):
+    prediction = latest_predictions.get(
+        device_id
+    )
+
+    if prediction is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Previsao nao encontrada"
+        )
+
+    return prediction
+
+
+# ==========================================
+# COMANDO DA ESTEIRA
+# ==========================================
+
 @app.post("/api/conveyor/command")
-async def conveyor_command(command: ConveyorCommand):
+async def conveyor_command(
+    command: ConveyorCommand
+):
     event = {
         "event_id": str(uuid.uuid4()),
         "device_id": "conveyor-01",
@@ -189,20 +340,32 @@ async def conveyor_command(command: ConveyorCommand):
 
         await app.state.exchange.publish(
             aio_pika.Message(
-                body=json.dumps(event).encode("utf-8"),
-                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                body=json.dumps(
+                    event
+                ).encode("utf-8"),
+                delivery_mode=(
+                    aio_pika.DeliveryMode.PERSISTENT
+                ),
                 content_type="application/json",
                 message_id=event["event_id"]
             ),
-            routing_key="command.factory.actuator.conveyor-01",
+            routing_key=(
+                "command.factory.actuator.conveyor-01"
+            ),
             mandatory=True
         )
 
     except Exception:
-        logger.exception("Erro ao publicar comando")
+        logger.exception(
+            "Erro ao publicar comando"
+        )
+
         raise HTTPException(
             status_code=503,
-            detail="Nao foi possivel encaminhar o comando"
+            detail=(
+                "Nao foi possivel encaminhar "
+                "o comando"
+            )
         )
 
     return {
@@ -212,15 +375,25 @@ async def conveyor_command(command: ConveyorCommand):
     }
 
 
+# ==========================================
+# WEBSOCKET
+# ==========================================
+
 @app.websocket("/ws/factory")
-async def factory_websocket(websocket: WebSocket):
+async def factory_websocket(
+    websocket: WebSocket
+):
     await websocket.accept()
+
     websocket_clients.add(websocket)
 
     try:
+        # Envia estado completo para quem
+        # acabou de abrir o dashboard.
         await websocket.send_json({
             "type": "snapshot",
-            "devices": latest_events
+            "devices": latest_events,
+            "predictions": latest_predictions
         })
 
         while True:
@@ -228,5 +401,8 @@ async def factory_websocket(websocket: WebSocket):
 
     except WebSocketDisconnect:
         pass
+
     finally:
-        websocket_clients.discard(websocket)
+        websocket_clients.discard(
+            websocket
+        )

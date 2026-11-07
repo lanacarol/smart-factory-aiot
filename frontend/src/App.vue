@@ -25,9 +25,9 @@ ChartJS.register(
   Filler
 )
 
-// =====================================
+// ==========================================
 // TIPOS
-// =====================================
+// ==========================================
 
 type DeviceEvent = {
   event_id?: string
@@ -37,6 +37,20 @@ type DeviceEvent = {
   payload: Record<string, number | boolean>
 }
 
+type PredictionEvent = {
+  event_id?: string
+  device_id: string
+  timestamp: string
+  type: 'prediction'
+  payload: {
+    rul_cycles: number
+    health_percent: number
+    maintenance_status: 'healthy' | 'warning' | 'critical'
+    model_version: string
+    cycle: number
+  }
+}
+
 type HistoryPoint = {
   time: string
   motor: number
@@ -44,18 +58,20 @@ type HistoryPoint = {
   environment: number | null
 }
 
-// =====================================
-// CONFIGURAÇÕES
-// =====================================
+// ==========================================
+// CONEXOES
+// ==========================================
 
 const API_URL = 'http://localhost:8000'
 const WS_URL = 'ws://localhost:8000/ws/factory'
 
-// =====================================
-// ESTADOS
-// =====================================
+// ==========================================
+// ESTADO
+// ==========================================
 
 const devices = ref<Record<string, DeviceEvent>>({})
+const predictions = ref<Record<string, PredictionEvent>>({})
+
 const connected = ref(false)
 const commandLoading = ref(false)
 const feedback = ref('')
@@ -68,9 +84,9 @@ let reconnectTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let active = true
 
-// =====================================
+// ==========================================
 // DISPOSITIVOS
-// =====================================
+// ==========================================
 
 const motor = computed(
   () => devices.value['motor-01']?.payload
@@ -88,9 +104,27 @@ const fan = computed(
   () => devices.value['fan-01']?.payload.running === true
 )
 
-// =====================================
-// CONEXÃO E ATUALIZAÇÃO
-// =====================================
+const motorRunning = computed(
+  () => motor.value?.running === true
+)
+
+// ==========================================
+// ATUALIZACOES E CONEXAO
+// ==========================================
+
+function isRecent(timestamp?: string): boolean {
+  if (!connected.value || !timestamp) {
+    return false
+  }
+
+  const time = new Date(timestamp).getTime()
+
+  return (
+    Number.isFinite(time) &&
+    now.value - time < 12000 &&
+    now.value - time > -5000
+  )
+}
 
 const lastUpdate = computed(() => {
   const timestamps = Object.values(devices.value)
@@ -109,17 +143,30 @@ const online = computed(
     now.value - lastUpdate.value < 12000
 )
 
+const motorOnline = computed(
+  () => isRecent(devices.value['motor-01']?.timestamp)
+)
+
+const conveyorOnline = computed(
+  () => isRecent(devices.value['conveyor-01']?.timestamp)
+)
+
+const fanOnline = computed(
+  () => isRecent(devices.value['fan-01']?.timestamp)
+)
+
 const lastUpdateText = computed(() => {
   if (!lastUpdate.value) {
     return 'Aguardando dados...'
   }
 
-  return new Date(lastUpdate.value).toLocaleTimeString('pt-BR')
+  return new Date(lastUpdate.value)
+    .toLocaleTimeString('pt-BR')
 })
 
-// =====================================
+// ==========================================
 // VALORES DOS SENSORES
-// =====================================
+// ==========================================
 
 const temperature = computed(
   () => Number(motor.value?.temperature_c ?? 0)
@@ -141,57 +188,112 @@ const humidity = computed(
   () => Number(environment.value?.humidity_percent ?? 0)
 )
 
-const motorRunning = computed(
-  () => motor.value?.running === true
+// ==========================================
+// MANUTENCAO PREDITIVA
+// ==========================================
+
+const prediction = computed(
+  () => predictions.value['motor-01']
 )
 
-// =====================================
+const predictionOnline = computed(
+  () => isRecent(prediction.value?.timestamp)
+)
+
+const health = computed(
+  () => Number(prediction.value?.payload.health_percent ?? 0)
+)
+
+const rul = computed(
+  () => Number(prediction.value?.payload.rul_cycles ?? 0)
+)
+
+const cycle = computed(
+  () => Number(prediction.value?.payload.cycle ?? 0)
+)
+
+const aiStatus = computed(() => {
+  if (!predictionOnline.value) {
+    return 'Sem previsão recente'
+  }
+
+  switch (prediction.value?.payload.maintenance_status) {
+    case 'healthy':
+      return 'Saudável'
+    case 'warning':
+      return 'Atenção'
+    case 'critical':
+      return 'Crítico'
+    default:
+      return 'Indisponível'
+  }
+})
+
+const aiStatusClass = computed(() => {
+  if (!predictionOnline.value) return 'neutral'
+
+  switch (prediction.value?.payload.maintenance_status) {
+    case 'healthy':
+      return 'success'
+    case 'warning':
+      return 'warning'
+    case 'critical':
+      return 'danger'
+    default:
+      return 'neutral'
+  }
+})
+
+const healthColor = computed(() => {
+  if (!predictionOnline.value) return '#64748b'
+  if (health.value < 30) return '#fb7185'
+  if (health.value < 60) return '#fbbf24'
+  return '#34d399'
+})
+
+const healthBarStyle = computed(() => ({
+  width: `${predictionOnline.value ? health.value : 0}%`,
+  background: healthColor.value
+}))
+
+const predictionTime = computed(() => {
+  if (!prediction.value?.timestamp) {
+    return 'Aguardando...'
+  }
+
+  return new Date(prediction.value.timestamp)
+    .toLocaleTimeString('pt-BR')
+})
+
+// ==========================================
 // ESTADO VISUAL DO MOTOR
-// =====================================
+// ==========================================
 
 const motorStatus = computed(() => {
-  if (!online.value) {
-    return 'Sem dados'
-  }
-
-  if (!motorRunning.value) {
-    return 'Desligado'
-  }
-
-  if (temperature.value >= 85) {
-    return 'Temperatura crítica'
-  }
-
-  if (temperature.value >= 70) {
-    return 'Temperatura elevada'
-  }
-
+  if (!motorOnline.value) return 'Sem dados'
+  if (!motorRunning.value) return 'Desligado'
+  if (temperature.value >= 85) return 'Temperatura crítica'
+  if (temperature.value >= 70) return 'Temperatura elevada'
   return 'Operação normal'
 })
 
 const motorStatusClass = computed(() => {
-  if (!online.value) return 'neutral'
-  if (!motorRunning.value) return 'neutral'
+  if (!motorOnline.value || !motorRunning.value) return 'neutral'
   if (temperature.value >= 85) return 'danger'
   if (temperature.value >= 70) return 'warning'
   return 'success'
 })
 
-// =====================================
-// GRÁFICO DE TEMPERATURA
-// =====================================
+// ==========================================
+// GRAFICOS
+// ==========================================
 
 const temperatureChart = computed(() => ({
   labels: history.value.map(item => item.time),
-
   datasets: [
     {
       label: 'Motor (°C)',
-
-      data: history.value.map(
-        item => item.motor
-      ),
-
+      data: history.value.map(item => item.motor),
       borderColor: '#38bdf8',
       backgroundColor: 'rgba(56,189,248,0.12)',
       borderWidth: 2,
@@ -201,11 +303,7 @@ const temperatureChart = computed(() => ({
     },
     {
       label: 'Ambiente (°C)',
-
-      data: history.value.map(
-        item => item.environment
-      ),
-
+      data: history.value.map(item => item.environment),
       borderColor: '#34d399',
       backgroundColor: 'rgba(52,211,153,0.05)',
       borderWidth: 2,
@@ -216,21 +314,12 @@ const temperatureChart = computed(() => ({
   ]
 }))
 
-// =====================================
-// GRÁFICO DE VIBRAÇÃO
-// =====================================
-
 const vibrationChart = computed(() => ({
   labels: history.value.map(item => item.time),
-
   datasets: [
     {
       label: 'Vibração (mm/s)',
-
-      data: history.value.map(
-        item => item.vibration
-      ),
-
+      data: history.value.map(item => item.vibration),
       borderColor: '#f59e0b',
       backgroundColor: 'rgba(245,158,11,0.12)',
       borderWidth: 2,
@@ -245,16 +334,12 @@ const chartOptions = {
   responsive: true,
   maintainAspectRatio: false,
   animation: false as const,
-
   plugins: {
     legend: {
       display: true,
-      labels: {
-        color: '#cbd5e1'
-      }
+      labels: { color: '#cbd5e1' }
     }
   },
-
   scales: {
     x: {
       ticks: {
@@ -265,11 +350,8 @@ const chartOptions = {
         color: 'rgba(148,163,184,0.08)'
       }
     },
-
     y: {
-      ticks: {
-        color: '#94a3b8'
-      },
+      ticks: { color: '#94a3b8' },
       grid: {
         color: 'rgba(148,163,184,0.1)'
       }
@@ -277,24 +359,18 @@ const chartOptions = {
   }
 }
 
-// =====================================
-// RECEBER EVENTOS
-// =====================================
+// ==========================================
+// PROCESSAR EVENTOS
+// ==========================================
 
-function addEvent(event: DeviceEvent) {
+function addDeviceEvent(event: DeviceEvent) {
   const previous = devices.value[event.device_id]
 
-  if (
-    previous &&
-    event.timestamp < previous.timestamp
-  ) {
+  if (previous && event.timestamp < previous.timestamp) {
     return
   }
 
   devices.value[event.device_id] = event
-
-  // Atualiza o histórico apenas quando
-  // chega uma leitura nova do motor.
 
   if (
     event.device_id === 'motor-01' &&
@@ -302,38 +378,38 @@ function addEvent(event: DeviceEvent) {
   ) {
     const payload = event.payload
 
-    const point: HistoryPoint = {
+    history.value.push({
       time: new Date(event.timestamp)
         .toLocaleTimeString('pt-BR'),
-
-      motor: Number(
-        payload.temperature_c ?? 0
-      ),
-
-      vibration: Number(
-        payload.vibration_mm_s ?? 0
-      ),
-
+      motor: Number(payload.temperature_c ?? 0),
+      vibration: Number(payload.vibration_mm_s ?? 0),
       environment: devices.value['environment-01']
         ? Number(
             devices.value['environment-01']
               .payload.temperature_c ?? 0
           )
         : null
-    }
+    })
 
-    history.value.push(point)
-
-    // Mantém somente as últimas 30 leituras.
     if (history.value.length > 30) {
       history.value.shift()
     }
   }
 }
 
-// =====================================
+function addPrediction(event: PredictionEvent) {
+  const previous = predictions.value[event.device_id]
+
+  if (previous && event.timestamp < previous.timestamp) {
+    return
+  }
+
+  predictions.value[event.device_id] = event
+}
+
+// ==========================================
 // WEBSOCKET
-// =====================================
+// ==========================================
 
 function connectWebSocket() {
   if (!active) return
@@ -351,22 +427,30 @@ function connectWebSocket() {
 
       if (data.type === 'snapshot') {
         devices.value = data.devices || {}
+        predictions.value = data.predictions || {}
         return
       }
 
-      if (data.device_id && data.payload) {
-        addEvent(data as DeviceEvent)
+      if (!data.device_id || !data.payload) {
+        return
+      }
+
+      if (data.type === 'prediction') {
+        addPrediction(data as PredictionEvent)
+      } else if (
+        data.type === 'telemetry' ||
+        data.type === 'state'
+      ) {
+        addDeviceEvent(data as DeviceEvent)
       }
     } catch (error) {
-      console.error(
-        'Erro ao receber evento:',
-        error
-      )
+      console.error('Erro ao receber evento:', error)
     }
   }
 
   socket.onclose = () => {
     connected.value = false
+    socket = null
 
     if (active) {
       reconnectTimer = setTimeout(
@@ -381,16 +465,14 @@ function connectWebSocket() {
   }
 }
 
-// =====================================
+// ==========================================
 // CONTROLE DA ESTEIRA
-// =====================================
+// ==========================================
 
-async function sendCommand(
-  action: 'ON' | 'OFF'
-) {
+async function sendCommand(action: 'ON' | 'OFF') {
   if (
     commandLoading.value ||
-    !online.value
+    !conveyorOnline.value
   ) {
     return
   }
@@ -403,14 +485,10 @@ async function sendCommand(
       `${API_URL}/api/conveyor/command`,
       {
         method: 'POST',
-
         headers: {
           'Content-Type': 'application/json'
         },
-
-        body: JSON.stringify({
-          action
-        })
+        body: JSON.stringify({ action })
       }
     )
 
@@ -425,35 +503,31 @@ async function sendCommand(
       'Aguardando atualização da esteira.'
   } catch (error) {
     console.error(error)
-
     feedback.value =
-      'Erro ao enviar comando. ' +
-      'Verifique a conexão com a API.'
+      'Erro ao enviar comando. Verifique a API.'
   } finally {
     commandLoading.value = false
   }
 }
 
-// =====================================
-// FORMATAÇÃO
-// =====================================
+// ==========================================
+// FORMATACAO
+// ==========================================
 
-function formatNumber(
-  value: number,
-  digits = 1
-) {
-  return value
-    .toFixed(digits)
-    .replace('.', ',')
+function formatNumber(value: number, digits = 1) {
+  return value.toFixed(digits).replace('.', ',')
 }
 
-// =====================================
+function formatInteger(value: number) {
+  return Math.round(value).toLocaleString('pt-BR')
+}
+
+// ==========================================
 // CICLO DE VIDA
-// =====================================
+// ==========================================
 
 onMounted(() => {
   active = true
-
   connectWebSocket()
 
   clockTimer = setInterval(() => {
@@ -463,10 +537,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   active = false
-
   clearTimeout(reconnectTimer)
   clearInterval(clockTimer)
-
   socket?.close()
 })
 </script>
@@ -474,135 +546,191 @@ onUnmounted(() => {
 <template>
   <div class="dashboard">
 
-    <!-- CABEÇALHO -->
+    <!-- CABECALHO -->
 
     <header class="header">
       <div>
-        <div class="eyebrow">
-          SMART FACTORY AIoT
-        </div>
-
-        <h1>
-          Centro de Controle Industrial
-        </h1>
-
+        <div class="eyebrow">SMART FACTORY AIoT</div>
+        <h1>Centro de Controle Industrial</h1>
         <p>
-          Monitoramento inteligente de equipamentos
-          em tempo real
+          Monitoramento inteligente e manutenção
+          preditiva em tempo real
         </p>
       </div>
 
-      <div
-        class="connection"
-        :class="{ active: online }"
-      >
+      <div class="connection" :class="{ active: online }">
         <span class="dot"></span>
-
-        {{
-          online
-            ? 'Sistema online'
-            : 'Sem dados recentes'
-        }}
+        {{ online ? 'Sistema online' : 'Sem dados recentes' }}
       </div>
     </header>
 
     <main>
 
-      <!-- VISÃO GERAL -->
+      <!-- VISAO GERAL -->
 
       <section class="section-heading">
-        <h2>
-          Visão geral da fábrica
-        </h2>
-
-        <span>
-          Dados recebidos via MQTT,
-          RabbitMQ e WebSocket
-        </span>
+        <h2>Visão geral da fábrica</h2>
+        <span>MQTT · RabbitMQ · WebSocket</span>
       </section>
-
-      <!-- INDICADORES -->
 
       <div class="metrics">
 
         <article class="metric">
-          <div class="metric-label">
-            Temperatura do motor
-          </div>
-
+          <div class="metric-label">Temperatura do motor</div>
           <div class="metric-value">
-            {{ formatNumber(temperature) }}
+            {{ motorOnline ? formatNumber(temperature) : '—' }}
             <small>°C</small>
           </div>
-
-          <span class="metric-foot">
-            Motor 01
-          </span>
+          <span class="metric-foot">Motor 01</span>
         </article>
 
         <article class="metric">
-          <div class="metric-label">
-            Vibração do motor
-          </div>
-
+          <div class="metric-label">Vibração do motor</div>
           <div class="metric-value">
-            {{ formatNumber(vibration, 2) }}
+            {{ motorOnline ? formatNumber(vibration, 2) : '—' }}
             <small>mm/s</small>
           </div>
-
-          <span class="metric-foot">
-            Sensor de vibração
-          </span>
+          <span class="metric-foot">Sensor de vibração</span>
         </article>
 
         <article class="metric">
-          <div class="metric-label">
-            Corrente elétrica
-          </div>
-
+          <div class="metric-label">Corrente elétrica</div>
           <div class="metric-value">
-            {{ formatNumber(current, 2) }}
+            {{ motorOnline ? formatNumber(current, 2) : '—' }}
             <small>A</small>
           </div>
-
-          <span class="metric-foot">
-            Consumo do motor
-          </span>
+          <span class="metric-foot">Consumo do motor</span>
         </article>
 
         <article class="metric">
-          <div class="metric-label">
-            Temperatura ambiente
-          </div>
-
+          <div class="metric-label">Temperatura ambiente</div>
           <div class="metric-value">
             {{ formatNumber(ambient) }}
             <small>°C</small>
           </div>
-
           <span class="metric-foot">
-            Umidade:
-            {{ formatNumber(humidity) }}%
+            Umidade: {{ formatNumber(humidity) }}%
           </span>
+        </article>
+      </div>
+
+      <!-- MANUTENCAO PREDITIVA -->
+
+      <section class="section-heading">
+        <h2>Inteligência Artificial · Manutenção Preditiva</h2>
+        <span>Previsões produzidas por modelos treinados</span>
+      </section>
+
+      <div class="ai-grid">
+
+        <article class="panel ai-card">
+          <div class="ai-label">
+            <span>🧠 Saúde estimada do motor</span>
+            <span
+              class="motor-badge"
+              :class="aiStatusClass"
+            >
+              {{ aiStatus }}
+            </span>
+          </div>
+
+          <div class="ai-value" :style="{ color: healthColor }">
+            {{
+              predictionOnline
+                ? formatNumber(health, 1) + '%'
+                : '—'
+            }}
+          </div>
+
+          <div class="health-track">
+            <div
+              class="health-fill"
+              :style="healthBarStyle"
+            ></div>
+          </div>
+
+          <p class="ai-description">
+            Estimativa calculada pelo modelo de regressão
+            com base nos sensores e ciclos do equipamento.
+          </p>
+        </article>
+
+        <article class="panel ai-card">
+          <div class="ai-label">
+            <span>⏳ Vida útil restante (RUL)</span>
+            <span class="ai-tag">Predição</span>
+          </div>
+
+          <div class="ai-value">
+            {{
+              predictionOnline
+                ? formatInteger(rul)
+                : '—'
+            }}
+            <small>ciclos</small>
+          </div>
+
+          <p class="ai-description">
+            Quantidade estimada de ciclos até o fim
+            da vida útil sintética do motor.
+          </p>
+
+          <div class="ai-detail">
+            Ciclos registrados:
+            <strong>
+              {{ predictionOnline ? formatInteger(cycle) : '—' }}
+            </strong>
+          </div>
+        </article>
+
+        <article class="panel ai-card">
+          <div class="ai-label">
+            <span>🔎 Diagnóstico preditivo</span>
+            <span class="ai-tag">Modelo v1.0.0</span>
+          </div>
+
+          <div
+            class="ai-diagnosis"
+            :class="aiStatusClass"
+          >
+            {{ aiStatus }}
+          </div>
+
+          <p class="ai-description">
+            {{
+              !predictionOnline
+                ? 'Aguardando uma previsão atualizada da IA.'
+                : aiStatusClass === 'success'
+                  ? 'O modelo não identificou necessidade de manutenção pelos limites demonstrativos.'
+                  : aiStatusClass === 'warning'
+                    ? 'A previsão indica atenção. Recomenda-se avaliar o equipamento.'
+                    : 'A previsão atingiu os limites críticos definidos para a simulação.'
+            }}
+          </p>
+
+          <div class="ai-detail">
+            Última previsão:
+            <strong>{{ predictionTime }}</strong>
+          </div>
         </article>
 
       </div>
 
-      <!-- GRÁFICOS -->
+      <p class="ai-disclaimer">
+        Resultados experimentais de modelos treinados com
+        dados sintéticos. Os limites de alerta não foram
+        validados para uso industrial.
+      </p>
+
+      <!-- GRAFICOS -->
 
       <div class="content-grid">
 
         <section class="panel">
           <div class="panel-header">
-            <h2>
-              Temperatura em tempo real
-            </h2>
-
-            <span>
-              Últimas 30 leituras
-            </span>
+            <h2>Temperatura em tempo real</h2>
+            <span>Últimas 30 leituras</span>
           </div>
-
           <div class="chart-area">
             <Line
               :data="temperatureChart"
@@ -613,15 +741,9 @@ onUnmounted(() => {
 
         <section class="panel">
           <div class="panel-header">
-            <h2>
-              Vibração do motor
-            </h2>
-
-            <span>
-              mm/s
-            </span>
+            <h2>Vibração do motor</h2>
+            <span>mm/s</span>
           </div>
-
           <div class="chart-area">
             <Line
               :data="vibrationChart"
@@ -632,21 +754,16 @@ onUnmounted(() => {
 
       </div>
 
-      <!-- ESTADO DO MOTOR -->
+      <!-- MONITORAMENTO DO MOTOR -->
 
       <section class="panel motor-panel">
         <div class="motor-panel-content">
           <div>
-            <h2>
-              Monitoramento do motor
-            </h2>
-
+            <h2>Monitoramento do motor</h2>
             <p>
-              Estado operacional baseado nos
-              sensores simulados.
+              Estado operacional baseado nos sensores simulados.
             </p>
           </div>
-
           <span
             class="motor-badge"
             :class="motorStatusClass"
@@ -656,67 +773,44 @@ onUnmounted(() => {
         </div>
 
         <div class="motor-panel-footer">
-          <span>
-            Última leitura:
-            {{ lastUpdateText }}
-          </span>
-
-          <span>
-            Limites de temperatura ilustrativos
-          </span>
+          <span>Última leitura: {{ lastUpdateText }}</span>
+          <span>Limites de temperatura ilustrativos</span>
         </div>
       </section>
 
       <!-- EQUIPAMENTOS -->
 
       <section class="section-heading">
-        <h2>
-          Equipamentos e atuadores
-        </h2>
-
-        <span>
-          Estado recebido diretamente
-          do simulador
-        </span>
+        <h2>Equipamentos e atuadores</h2>
+        <span>Estados recebidos do simulador</span>
       </section>
 
       <div class="devices-grid">
 
-        <!-- ESTEIRA -->
-
         <article class="panel device">
           <div class="device-top">
-            <div class="device-icon">
-              ⚙️
-            </div>
-
+            <div class="device-icon">⚙️</div>
             <span
               class="status"
-              :class="online && conveyor ? 'on' : 'off'"
+              :class="conveyorOnline && conveyor ? 'on' : 'off'"
             >
               {{
-                online
-                  ? conveyor
+                !conveyorOnline
+                  ? 'Sem dados'
+                  : conveyor
                     ? 'Ligada'
                     : 'Desligada'
-                  : 'Sem dados'
               }}
             </span>
           </div>
 
-          <h3>
-            Esteira transportadora
-          </h3>
-
-          <p>
-            Controle remoto via
-            RabbitMQ e MQTT
-          </p>
+          <h3>Esteira transportadora</h3>
+          <p>Controle remoto via RabbitMQ e MQTT</p>
 
           <div class="buttons">
             <button
               class="btn-green"
-              :disabled="commandLoading || !online"
+              :disabled="commandLoading || !conveyorOnline"
               @click="sendCommand('ON')"
             >
               Ligar
@@ -724,75 +818,58 @@ onUnmounted(() => {
 
             <button
               class="btn-red"
-              :disabled="commandLoading || !online"
+              :disabled="commandLoading || !conveyorOnline"
               @click="sendCommand('OFF')"
             >
               Desligar
             </button>
           </div>
 
-          <p
-            v-if="feedback"
-            class="feedback"
-          >
+          <p v-if="feedback" class="feedback">
             {{ feedback }}
           </p>
         </article>
 
-        <!-- VENTILADOR -->
-
         <article class="panel device">
           <div class="device-top">
-            <div class="device-icon">
-              💨
-            </div>
-
+            <div class="device-icon">💨</div>
             <span
               class="status"
-              :class="online && fan ? 'on' : 'off'"
+              :class="fanOnline && fan ? 'on' : 'off'"
             >
               {{
-                online
-                  ? fan
+                !fanOnline
+                  ? 'Sem dados'
+                  : fan
                     ? 'Ligado'
                     : 'Desligado'
-                  : 'Sem dados'
               }}
             </span>
           </div>
 
-          <h3>
-            Ventilador industrial
-          </h3>
-
+          <h3>Ventilador industrial</h3>
           <p>
             Atuador controlado automaticamente
             pela temperatura ambiente.
           </p>
 
           <div class="rule">
-            Liga acima de 35 °C ·
-            Desliga abaixo de 30 °C
+            Liga acima de 35 °C · Desliga abaixo de 30 °C
           </div>
         </article>
 
       </div>
 
-      <!-- GÊMEO DIGITAL 3D -->
+      <!-- GEMEO DIGITAL -->
 
       <section class="section-heading section-3d">
-        <h2>
-          Visualização industrial 3D
-        </h2>
-
-        <span>
-          Equipamentos conectados ao WebSocket
-        </span>
+        <h2>Visualização industrial 3D</h2>
+        <span>Gêmeo digital conectado ao WebSocket</span>
       </section>
 
       <Factory3D
-        :conveyor-on="conveyor"
-        :fan-on="fan"
+        :conveyor-on="conveyorOnline && conveyor"
+        :fan-on="fanOnline && fan"
         :motor-temperature="temperature"
         :vibration="vibration"
         :ambient-temperature="ambient"
@@ -800,11 +877,9 @@ onUnmounted(() => {
         :online="online"
       />
 
-      <!-- RODAPÉ -->
-
       <footer>
         Smart Factory AIoT · Vue 3 · Three.js ·
-        FastAPI · RabbitMQ · MQTT · InfluxDB
+        FastAPI · RabbitMQ · MQTT · InfluxDB · Scikit-learn
       </footer>
 
     </main>
@@ -832,8 +907,6 @@ button {
   margin: 0 auto;
   padding: 32px;
 }
-
-/* CABEÇALHO */
 
 .header {
   display: flex;
@@ -896,8 +969,6 @@ h3 {
   margin-right: 6px;
 }
 
-/* SEÇÕES */
-
 .section-heading {
   display: flex;
   align-items: center;
@@ -911,8 +982,6 @@ h3 {
   color: #64748b;
   font-size: 12px;
 }
-
-/* INDICADORES */
 
 .metrics {
   display: grid;
@@ -951,7 +1020,110 @@ h3 {
   font-size: 12px;
 }
 
-/* GRÁFICOS */
+/* INTELIGENCIA ARTIFICIAL */
+
+.ai-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.ai-card {
+  min-height: 230px;
+}
+
+.ai-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ai-value {
+  margin: 24px 0 14px;
+  font-size: 37px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.ai-value small {
+  color: #94a3b8;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.ai-tag {
+  color: #7dd3fc;
+  background: #173349;
+  padding: 7px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+}
+
+.ai-description {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.health-track {
+  height: 10px;
+  background: #334155;
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.health-fill {
+  height: 100%;
+  border-radius: 20px;
+  transition: width 0.5s ease;
+}
+
+.ai-diagnosis {
+  font-size: 28px;
+  font-weight: 750;
+  margin-top: 25px;
+}
+
+.ai-diagnosis.success {
+  color: #34d399;
+}
+
+.ai-diagnosis.warning {
+  color: #fbbf24;
+}
+
+.ai-diagnosis.danger {
+  color: #fb7185;
+}
+
+.ai-diagnosis.neutral {
+  color: #94a3b8;
+}
+
+.ai-detail {
+  margin-top: 14px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.ai-detail strong {
+  color: #e2e8f0;
+}
+
+.ai-disclaimer {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 0 0 32px;
+}
+
+/* GRAFICOS */
 
 .content-grid {
   display: grid;
@@ -971,7 +1143,7 @@ h3 {
   height: 270px;
 }
 
-/* MONITORAMENTO DO MOTOR */
+/* MOTOR */
 
 .motor-panel {
   margin-bottom: 36px;
@@ -1123,13 +1295,9 @@ button:disabled {
   color: #38bdf8 !important;
 }
 
-/* GÊMEO DIGITAL */
-
 .section-3d {
   margin-top: 36px;
 }
-
-/* RODAPÉ */
 
 footer {
   text-align: center;
@@ -1138,7 +1306,11 @@ footer {
   font-size: 12px;
 }
 
-/* RESPONSIVIDADE */
+@media (max-width: 1100px) {
+  .ai-grid {
+    grid-template-columns: 1fr;
+  }
+}
 
 @media (max-width: 950px) {
   .metrics {
