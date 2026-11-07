@@ -64,6 +64,14 @@ def conectar_rabbitmq():
                     routing_key=rota
                 )
 
+
+            rabbit_channel.queue_bind(
+                exchange=EXCHANGE,
+                queue="q.telemetry.websocket",
+                routing_key="state.#"
+            )
+
+
             rabbit_channel.queue_declare(
                 queue="q.dead-letter",
                 durable=True

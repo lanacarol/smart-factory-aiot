@@ -54,7 +54,7 @@ services:
       interval: 15s
       timeout: 10s
       retries: 10
-  
+
   mosquitto:
     image: eclipse-mosquitto:2
     restart: unless-stopped
@@ -63,7 +63,7 @@ services:
       - mosquitto_data:/mosquitto/data
     ports:
       - "127.0.0.1:1883:1883"
-  
+
   simulator:
     build: ./simulator
     restart: unless-stopped
@@ -73,7 +73,7 @@ services:
       MQTT_GATEWAY_PASSWORD: ${MQTT_GATEWAY_PASSWORD}
     depends_on:
       - mosquitto
-  
+
   mqtt-gateway:
     build: ./services/mqtt_gateway
     restart: unless-stopped
@@ -88,7 +88,7 @@ services:
         condition: service_healthy
       mosquitto:
         condition: service_started
-  
+
   influx-writer:
     build: ./services/influx_writer
     restart: unless-stopped
@@ -105,7 +105,7 @@ services:
         condition: service_healthy
       influxdb:
         condition: service_healthy
-  
+
   command-gateway:
     build: ./services/command_gateway
     restart: unless-stopped
@@ -120,6 +120,19 @@ services:
         condition: service_healthy
       mosquitto:
         condition: service_started
+
+  api:
+    build: ./services/api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
 
 volumes:
