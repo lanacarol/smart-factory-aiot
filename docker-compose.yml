@@ -105,6 +105,21 @@ services:
         condition: service_healthy
       influxdb:
         condition: service_healthy
+  
+  command-gateway:
+    build: ./services/command_gateway
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_GATEWAY_PASSWORD: ${MQTT_GATEWAY_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
 
 
 volumes:
