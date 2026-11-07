@@ -70,6 +70,7 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_SIMULATOR_PASSWORD: ${MQTT_SIMULATOR_PASSWORD}
+      MQTT_GATEWAY_PASSWORD: ${MQTT_GATEWAY_PASSWORD}
     depends_on:
       - mosquitto
 
