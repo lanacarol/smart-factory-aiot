@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 import aio_pika
+import asyncpg
 
 from fastapi import (
     FastAPI,
@@ -24,33 +25,237 @@ from pydantic import BaseModel
 # ==========================================
 
 logging.basicConfig(level=logging.INFO)
-
 logger = logging.getLogger("smart-factory-api")
 
-RABBITMQ_HOST = os.getenv(
-    "RABBITMQ_HOST",
-    "rabbitmq"
-)
-
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 RABBITMQ_USER = os.environ["RABBITMQ_USER"]
 RABBITMQ_PASSWORD = os.environ["RABBITMQ_PASSWORD"]
+
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
+POSTGRES_USER = os.environ["POSTGRES_USER"]
+POSTGRES_PASSWORD = os.environ["POSTGRES_PASSWORD"]
+POSTGRES_DB = os.environ["POSTGRES_DB"]
 
 EXCHANGE = "factory.topic"
 QUEUE = "q.telemetry.websocket"
 
-
-# ==========================================
-# ESTADO ATUAL DA FABRICA
-# ==========================================
-
 latest_events = {}
 latest_predictions = {}
-
 websocket_clients = set()
 
 
 # ==========================================
-# ENVIO EM TEMPO REAL
+# BANCO DE DADOS
+# ==========================================
+
+async def list_devices(pool):
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(
+            """
+            SELECT
+                id,
+                device_id,
+                name,
+                device_type,
+                location,
+                active,
+                created_at
+            FROM devices
+            ORDER BY id
+            """
+        )
+
+    return [dict(row) for row in rows]
+
+
+async def list_alerts(pool, limit=50):
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(
+            """
+            SELECT
+                id,
+                device_id,
+                severity,
+                title,
+                description,
+                health_percent,
+                rul_cycles,
+                status,
+                detected_at,
+                resolved_at
+            FROM maintenance_alerts
+            ORDER BY detected_at DESC
+            LIMIT $1
+            """,
+            limit
+        )
+
+    return [dict(row) for row in rows]
+
+
+async def list_commands(pool, limit=50):
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(
+            """
+            SELECT
+                id,
+                event_id,
+                device_id,
+                action,
+                status,
+                requested_at,
+                executed_at,
+                error_message
+            FROM command_history
+            ORDER BY requested_at DESC
+            LIMIT $1
+            """,
+            limit
+        )
+
+    return [dict(row) for row in rows]
+
+
+# ==========================================
+# PERSISTENCIA DOS ALERTAS
+# ==========================================
+
+async def save_prediction_alert(pool, event):
+    payload = event["payload"]
+    device_id = event["device_id"]
+
+    severity = payload.get("maintenance_status")
+
+    if severity not in (
+        "healthy",
+        "warning",
+        "critical"
+    ):
+        raise ValueError(
+            "Status de manutencao invalido"
+        )
+
+    health = float(payload["health_percent"])
+    rul = float(payload["rul_cycles"])
+
+    if not (0 <= health <= 100 and rul >= 0):
+        raise ValueError(
+            "Valores de previsao invalidos"
+        )
+
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+
+            # Procura um alerta ainda ativo.
+            existing = await connection.fetchrow(
+                """
+                SELECT id, severity, status
+                FROM maintenance_alerts
+                WHERE device_id = $1
+                  AND status IN (
+                      'open',
+                      'acknowledged'
+                  )
+                ORDER BY detected_at DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                device_id
+            )
+
+            if severity == "healthy":
+
+                if existing:
+                    await connection.execute(
+                        """
+                        UPDATE maintenance_alerts
+                        SET status = 'resolved',
+                            resolved_at = NOW()
+                        WHERE device_id = $1
+                          AND status IN (
+                              'open',
+                              'acknowledged'
+                          )
+                        """,
+                        device_id
+                    )
+
+                    logger.info(
+                        "Alertas resolvidos: %s",
+                        device_id
+                    )
+
+                return
+
+            # Se ja ha alerta da mesma gravidade,
+            # evita criar outro a cada 3 segundos.
+            if (
+                existing
+                and existing["severity"] == severity
+            ):
+                return
+
+            # Se a gravidade mudou, encerra
+            # o alerta anterior antes de criar outro.
+            if existing:
+                await connection.execute(
+                    """
+                    UPDATE maintenance_alerts
+                    SET status = 'resolved',
+                        resolved_at = NOW()
+                    WHERE device_id = $1
+                      AND status IN (
+                          'open',
+                          'acknowledged'
+                      )
+                    """,
+                    device_id
+                )
+
+            if severity == "critical":
+                title = "Manutencao critica do motor"
+            else:
+                title = "Atencao: manutencao preventiva"
+
+            description = (
+                f"Previsao sintetica: saude "
+                f"{health:.2f}%, RUL "
+                f"{rul:.2f} ciclos."
+            )
+
+            await connection.execute(
+                """
+                INSERT INTO maintenance_alerts (
+                    device_id,
+                    severity,
+                    title,
+                    description,
+                    health_percent,
+                    rul_cycles,
+                    status
+                )
+                VALUES (
+                    $1, $2, $3, $4,
+                    $5, $6, 'open'
+                )
+                """,
+                device_id,
+                severity,
+                title,
+                description,
+                health,
+                rul
+            )
+
+            logger.warning(
+                "Alerta registrado | %s | %s",
+                device_id,
+                severity
+            )
+
+
+# ==========================================
+# WEBSOCKET
 # ==========================================
 
 async def broadcast(event):
@@ -59,7 +264,6 @@ async def broadcast(event):
     for websocket in list(websocket_clients):
         try:
             await websocket.send_json(event)
-
         except Exception:
             disconnected.append(websocket)
 
@@ -68,159 +272,185 @@ async def broadcast(event):
 
 
 # ==========================================
-# PROCESSAMENTO DE EVENTOS
+# EVENTOS DO RABBITMQ
 # ==========================================
 
 async def process_event(message):
-    async with message.process():
+    async with message.process(requeue=True):
+
         try:
             event = json.loads(
                 message.body.decode("utf-8")
             )
+        except (ValueError, UnicodeDecodeError):
+            logger.warning("JSON invalido recebido")
+            return
 
-            if not isinstance(event, dict):
-                logger.warning("Evento invalido")
-                return
+        if not isinstance(event, dict):
+            logger.warning("Evento invalido")
+            return
 
-            device_id = event.get("device_id")
-            event_type = event.get("type")
-            payload = event.get("payload")
+        device_id = event.get("device_id")
+        event_type = event.get("type")
+        payload = event.get("payload")
 
-            if not isinstance(device_id, str):
-                logger.warning("Evento sem device_id")
-                return
+        if not isinstance(device_id, str):
+            logger.warning("Evento sem device_id")
+            return
 
-            if not isinstance(payload, dict):
-                logger.warning("Payload invalido")
-                return
+        if not isinstance(payload, dict):
+            logger.warning("Payload invalido")
+            return
 
-            if event_type not in (
-                "telemetry",
-                "state",
-                "prediction"
-            ):
-                logger.warning(
-                    "Tipo desconhecido: %s",
-                    event_type
-                )
-                return
-
-            if event_type == "prediction":
-                previous = latest_predictions.get(
-                    device_id
-                )
-
-                if (
-                    previous
-                    and event.get("timestamp", "")
-                    < previous.get("timestamp", "")
-                ):
-                    return
-
-                latest_predictions[device_id] = event
-
-                logger.info(
-                    "Previsao recebida | %s | "
-                    "RUL: %s | Saude: %s%%",
-                    device_id,
-                    payload.get("rul_cycles"),
-                    payload.get("health_percent")
-                )
-
-            else:
-                previous = latest_events.get(
-                    device_id
-                )
-
-                if (
-                    previous
-                    and event.get("timestamp", "")
-                    < previous.get("timestamp", "")
-                ):
-                    return
-
-                latest_events[device_id] = event
-
-            if websocket_clients:
-                await broadcast(event)
-
-        except (
-            ValueError,
-            UnicodeDecodeError,
-            TypeError
-        ) as error:
+        if event_type not in (
+            "telemetry",
+            "state",
+            "prediction"
+        ):
             logger.warning(
-                "Mensagem invalida: %s",
-                error
+                "Tipo desconhecido: %s",
+                event_type
             )
+            return
+
+        if event_type == "prediction":
+
+            previous = latest_predictions.get(
+                device_id
+            )
+
+            if (
+                previous
+                and event.get("timestamp", "")
+                < previous.get("timestamp", "")
+            ):
+                return
+
+            try:
+                # Primeiro grava no banco.
+                # Depois disponibiliza a previsao
+                # para o dashboard.
+                await save_prediction_alert(
+                    app.state.db_pool,
+                    event
+                )
+            except (ValueError, KeyError, TypeError):
+                logger.warning(
+                    "Previsao invalida: %s",
+                    device_id
+                )
+                return
+
+            latest_predictions[device_id] = event
+
+            logger.info(
+                "IA recebida | %s | "
+                "RUL: %s | Saude: %s%%",
+                device_id,
+                payload.get("rul_cycles"),
+                payload.get("health_percent")
+            )
+
+        else:
+            previous = latest_events.get(
+                device_id
+            )
+
+            if (
+                previous
+                and event.get("timestamp", "")
+                < previous.get("timestamp", "")
+            ):
+                return
+
+            latest_events[device_id] = event
+
+        if websocket_clients:
+            await broadcast(event)
 
 
 # ==========================================
-# INICIALIZACAO DO RABBITMQ
+# INICIALIZACAO DA APLICACAO
 # ==========================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    connection = await aio_pika.connect_robust(
-        host=RABBITMQ_HOST,
-        login=RABBITMQ_USER,
-        password=RABBITMQ_PASSWORD,
-        heartbeat=60
+
+    logger.info("Conectando ao PostgreSQL...")
+
+    pool = await asyncpg.create_pool(
+        host=POSTGRES_HOST,
+        user=POSTGRES_USER,
+        password=POSTGRES_PASSWORD,
+        database=POSTGRES_DB,
+        min_size=1,
+        max_size=5
     )
 
-    channel = await connection.channel(
-        publisher_confirms=True,
-        on_return_raises=True
-    )
+    app.state.db_pool = pool
 
-    await channel.set_qos(prefetch_count=50)
+    logger.info("PostgreSQL conectado!")
 
-    exchange = await channel.declare_exchange(
-        EXCHANGE,
-        aio_pika.ExchangeType.TOPIC,
-        durable=True
-    )
-
-    queue = await channel.declare_queue(
-        QUEUE,
-        durable=True
-    )
-
-    # Leituras dos sensores.
-    await queue.bind(
-        exchange,
-        routing_key="telemetry.#"
-    )
-
-    # Estados dos equipamentos.
-    await queue.bind(
-        exchange,
-        routing_key="state.#"
-    )
-
-    # Previsoes produzidas pela IA.
-    await queue.bind(
-        exchange,
-        routing_key="prediction.#"
-    )
-
-    await queue.consume(process_event)
-
-    app.state.connection = connection
-    app.state.channel = channel
-    app.state.exchange = exchange
-
-    logger.info("API conectada ao RabbitMQ")
-    logger.info("Consumindo %s", QUEUE)
-    logger.info(
-        "Telemetria, estados e previsoes habilitados"
-    )
+    connection = None
 
     try:
+        connection = await aio_pika.connect_robust(
+            host=RABBITMQ_HOST,
+            login=RABBITMQ_USER,
+            password=RABBITMQ_PASSWORD,
+            heartbeat=60
+        )
+
+        channel = await connection.channel(
+            publisher_confirms=True,
+            on_return_raises=True
+        )
+
+        await channel.set_qos(
+            prefetch_count=50
+        )
+
+        exchange = await channel.declare_exchange(
+            EXCHANGE,
+            aio_pika.ExchangeType.TOPIC,
+            durable=True
+        )
+
+        queue = await channel.declare_queue(
+            QUEUE,
+            durable=True
+        )
+
+        for routing_key in (
+            "telemetry.#",
+            "state.#",
+            "prediction.#"
+        ):
+            await queue.bind(
+                exchange,
+                routing_key=routing_key
+            )
+
+        await queue.consume(
+            process_event
+        )
+
+        app.state.connection = connection
+        app.state.channel = channel
+        app.state.exchange = exchange
+
+        logger.info("RabbitMQ conectado!")
+        logger.info(
+            "API pronta: PostgreSQL + RabbitMQ + IA"
+        )
+
         yield
 
     finally:
-        await connection.close()
+        if connection:
+            await connection.close()
+
+        await pool.close()
 
 
 # ==========================================
@@ -229,10 +459,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Smart Factory AIoT",
-    version="0.2.0",
+    version="0.3.0",
     description=(
-        "API da fabrica inteligente com "
-        "manutencao preditiva"
+        "API industrial com MQTT, RabbitMQ, "
+        "PostgreSQL e manutencao preditiva"
     ),
     lifespan=lifespan
 )
@@ -254,7 +484,7 @@ class ConveyorCommand(BaseModel):
 
 
 # ==========================================
-# ROTAS REST
+# ROTAS PRINCIPAIS
 # ==========================================
 
 @app.get("/")
@@ -262,27 +492,38 @@ async def home():
     return {
         "name": "Smart Factory AIoT",
         "status": "online",
-        "docs": "/docs",
-        "ai_enabled": True
+        "database": "postgresql",
+        "ai_enabled": True,
+        "docs": "/docs"
     }
 
 
 @app.get("/health")
 async def health():
-    connected = (
+    rabbit_connected = (
         hasattr(app.state, "connection")
         and not app.state.connection.is_closed
     )
 
-    if not connected:
+    if not rabbit_connected:
         raise HTTPException(
             503,
             "RabbitMQ desconectado"
         )
 
+    try:
+        async with app.state.db_pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+    except Exception:
+        raise HTTPException(
+            503,
+            "PostgreSQL indisponivel"
+        )
+
     return {
         "status": "ok",
-        "rabbitmq": "connected"
+        "rabbitmq": "connected",
+        "postgresql": "connected"
     }
 
 
@@ -294,6 +535,50 @@ async def factory_state():
         "total_devices": len(latest_events)
     }
 
+
+# ==========================================
+# ROTAS POSTGRESQL
+# ==========================================
+
+@app.get("/api/devices")
+async def get_devices():
+    result = await list_devices(
+        app.state.db_pool
+    )
+
+    return {
+        "devices": result,
+        "total": len(result)
+    }
+
+
+@app.get("/api/alerts")
+async def get_alerts():
+    result = await list_alerts(
+        app.state.db_pool
+    )
+
+    return {
+        "alerts": result,
+        "total": len(result)
+    }
+
+
+@app.get("/api/commands/history")
+async def get_commands():
+    result = await list_commands(
+        app.state.db_pool
+    )
+
+    return {
+        "commands": result,
+        "total": len(result)
+    }
+
+
+# ==========================================
+# ROTAS DA IA
+# ==========================================
 
 @app.get("/api/ai/predictions")
 async def ai_predictions():
@@ -311,23 +596,25 @@ async def ai_prediction_device(device_id: str):
 
     if prediction is None:
         raise HTTPException(
-            status_code=404,
-            detail="Previsao nao encontrada"
+            404,
+            "Previsao nao encontrada"
         )
 
     return prediction
 
 
 # ==========================================
-# COMANDO DA ESTEIRA
+# COMANDO DA ESTEIRA + POSTGRESQL
 # ==========================================
 
 @app.post("/api/conveyor/command")
 async def conveyor_command(
     command: ConveyorCommand
 ):
+    event_id = uuid.uuid4()
+
     event = {
-        "event_id": str(uuid.uuid4()),
+        "event_id": str(event_id),
         "device_id": "conveyor-01",
         "type": "command",
         "payload": {
@@ -335,6 +622,35 @@ async def conveyor_command(
         }
     }
 
+    # Registra a tentativa de comando.
+    try:
+        async with app.state.db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO command_history (
+                    event_id,
+                    device_id,
+                    action,
+                    status
+                )
+                VALUES ($1, $2, $3, 'queued')
+                """,
+                event_id,
+                "conveyor-01",
+                command.action
+            )
+
+    except Exception:
+        logger.exception(
+            "Falha ao registrar comando no PostgreSQL"
+        )
+
+        raise HTTPException(
+            503,
+            "Nao foi possivel registrar o comando"
+        )
+
+    # Encaminha o comando ao RabbitMQ.
     try:
         await app.state.channel.ready()
 
@@ -347,7 +663,7 @@ async def conveyor_command(
                     aio_pika.DeliveryMode.PERSISTENT
                 ),
                 content_type="application/json",
-                message_id=event["event_id"]
+                message_id=str(event_id)
             ),
             routing_key=(
                 "command.factory.actuator.conveyor-01"
@@ -355,23 +671,38 @@ async def conveyor_command(
             mandatory=True
         )
 
-    except Exception:
+    except Exception as error:
         logger.exception(
-            "Erro ao publicar comando"
+            "Falha ao publicar comando"
         )
 
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Nao foi possivel encaminhar "
-                "o comando"
+        async with app.state.db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE command_history
+                SET status = 'failed',
+                    error_message = $2
+                WHERE event_id = $1
+                """,
+                event_id,
+                str(error)[:1000]
             )
+
+        raise HTTPException(
+            503,
+            "Nao foi possivel encaminhar o comando"
         )
+
+    logger.info(
+        "Comando registrado | %s | %s",
+        event_id,
+        command.action
+    )
 
     return {
         "status": "queued",
         "action": command.action,
-        "event_id": event["event_id"]
+        "event_id": str(event_id)
     }
 
 
@@ -384,12 +715,9 @@ async def factory_websocket(
     websocket: WebSocket
 ):
     await websocket.accept()
-
     websocket_clients.add(websocket)
 
     try:
-        # Envia estado completo para quem
-        # acabou de abrir o dashboard.
         await websocket.send_json({
             "type": "snapshot",
             "devices": latest_events,
