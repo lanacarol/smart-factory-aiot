@@ -156,6 +156,7 @@ function logout() {
         v-else-if="activePage === 'assistente'"
         api-url="http://localhost:8001"
         :token="session.token"
+        :username="session.username"
       />
 
       <InsightsPage

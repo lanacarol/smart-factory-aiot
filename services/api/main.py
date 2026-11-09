@@ -557,7 +557,9 @@ app.add_middleware(
     allow_headers=[
         "Content-Type",
         "Authorization"
-    ]
+    ],
+    # Permite a interface ler o cenario da resposta do assistente.
+    expose_headers=["X-Assistant-Context"]
 )
 
 # ==========================================
@@ -923,12 +925,20 @@ async def assistant_chat(
         devices
     )
 
+    snapshot = assistant.scenario_snapshot(
+        latest_events,
+        latest_predictions,
+        alerts
+    )
+
     return StreamingResponse(
         assistant.stream_answer(context, question),
         media_type="text/plain; charset=utf-8",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no"
+            "X-Accel-Buffering": "no",
+            # Cenario usado na resposta (JSON em ASCII).
+            "X-Assistant-Context": json.dumps(snapshot)
         }
     )
 
