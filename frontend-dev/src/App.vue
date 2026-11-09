@@ -6,6 +6,10 @@ import LoginScreen from './components/LoginScreen.vue'
 import Dashboard from './Dashboard.vue'
 import Mensageria from './components/Mensageria.vue'
 import AssistantChat from './components/AssistantChat.vue'
+import InsightsPage from './components/InsightsPage.vue'
+import LabPage from './components/LabPage.vue'
+import TrainingPage from './components/TrainingPage.vue'
+import DevicesPage from './components/DevicesPage.vue'
 
 // ==========================================
 // TIPOS
@@ -19,7 +23,24 @@ type Session = {
   role: Role
 }
 
-type Page = 'dashboard' | 'mensageria' | 'assistente'
+type Page =
+  | 'dashboard'
+  | 'insights'
+  | 'laboratorio'
+  | 'treinamento'
+  | 'dispositivos'
+  | 'mensageria'
+  | 'assistente'
+
+const PAGES: { id: Page; icon: string; label: string }[] = [
+  { id: 'dashboard', icon: '📊', label: 'Dashboard' },
+  { id: 'insights', icon: '🔎', label: 'Insights' },
+  { id: 'laboratorio', icon: '🧪', label: 'Laboratório' },
+  { id: 'treinamento', icon: '🧠', label: 'Treinamento' },
+  { id: 'dispositivos', icon: '🏭', label: 'Dispositivos' },
+  { id: 'mensageria', icon: '📨', label: 'Mensageria' },
+  { id: 'assistente', icon: '💬', label: 'Assistente' }
+]
 
 // ==========================================
 // AUTENTICACAO
@@ -103,33 +124,15 @@ function logout() {
       <div class="nav-inner">
 
         <button
+          v-for="page in PAGES"
+          :key="page.id"
           type="button"
           class="nav-button"
-          :class="{ active: activePage === 'dashboard' }"
-          @click="navigate('dashboard')"
+          :class="{ active: activePage === page.id }"
+          @click="navigate(page.id)"
         >
-          <span>📊</span>
-          Dashboard
-        </button>
-
-        <button
-          type="button"
-          class="nav-button"
-          :class="{ active: activePage === 'mensageria' }"
-          @click="navigate('mensageria')"
-        >
-          <span>📨</span>
-          Mensageria
-        </button>
-
-        <button
-          type="button"
-          class="nav-button"
-          :class="{ active: activePage === 'assistente' }"
-          @click="navigate('assistente')"
-        >
-          <span>💬</span>
-          Assistente
+          <span>{{ page.icon }}</span>
+          {{ page.label }}
         </button>
 
       </div>
@@ -154,6 +157,30 @@ function logout() {
         v-else-if="activePage === 'assistente'"
         api-url="http://localhost:8001"
         :token="session.token"
+      />
+
+      <InsightsPage
+        v-else-if="activePage === 'insights'"
+        :token="session!.token"
+        :role="session!.role"
+      />
+
+      <LabPage
+        v-else-if="activePage === 'laboratorio'"
+        :token="session!.token"
+        :role="session!.role"
+      />
+
+      <TrainingPage
+        v-else-if="activePage === 'treinamento'"
+        :token="session!.token"
+        :role="session!.role"
+      />
+
+      <DevicesPage
+        v-else-if="activePage === 'dispositivos'"
+        :token="session!.token"
+        :role="session!.role"
       />
 
     </main>
@@ -237,6 +264,9 @@ function logout() {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 7 telas: rola na horizontal em telas estreitas */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .nav-button {

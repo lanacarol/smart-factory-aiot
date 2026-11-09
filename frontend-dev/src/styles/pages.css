@@ -1,0 +1,366 @@
+/* Estilo comum das telas Treinamento, Laboratorio, Insights e
+   Dispositivos. Tudo restrito a .app-page para nao afetar as
+   telas existentes. */
+
+.app-page {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 34px;
+  min-height: 100vh;
+  color: #e2e8f0;
+  background: #0b1220;
+  font-family: Inter, Arial, sans-serif;
+  box-sizing: border-box;
+}
+
+.app-page * {
+  box-sizing: border-box;
+}
+
+.app-page .page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-bottom: 30px;
+}
+
+.app-page .eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: #38bdf8;
+  text-transform: uppercase;
+}
+
+.app-page h1 {
+  font-size: 30px;
+  margin: 12px 0;
+}
+
+.app-page h2 {
+  font-size: 19px;
+  margin: 0 0 6px;
+}
+
+.app-page h3 {
+  font-size: 15px;
+  margin: 0 0 10px;
+}
+
+.app-page .muted,
+.app-page .page-header p,
+.app-page .panel-heading p {
+  color: #94a3b8;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.app-page .small {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.app-page .metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.app-page .metric-card {
+  padding: 20px;
+  border-radius: 16px;
+  background: #141f31;
+  border: 1px solid #26364c;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.app-page .metric-card span {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.app-page .metric-card strong {
+  font-size: 28px;
+  color: #e2e8f0;
+  overflow-wrap: anywhere;
+}
+
+.app-page .metric-card small {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.app-page .green { color: #34d399 !important; }
+.app-page .yellow { color: #fbbf24 !important; }
+.app-page .red { color: #fb7185 !important; }
+.app-page .blue { color: #38bdf8 !important; }
+
+.app-page .panel {
+  background: #141f31;
+  border: 1px solid #26364c;
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 24px;
+  min-width: 0;
+}
+
+.app-page .panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.app-page .grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.app-page .grid-2 > .panel {
+  margin-bottom: 0;
+}
+
+.app-page .stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.app-page .chart-box {
+  position: relative;
+  height: 300px;
+}
+
+/* Tabelas */
+
+.app-page .table-container {
+  overflow-x: auto;
+}
+
+.app-page table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.app-page th {
+  text-align: left;
+  color: #94a3b8;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #26364c;
+  white-space: nowrap;
+}
+
+.app-page td {
+  padding: 11px 12px;
+  border-bottom: 1px solid #1c2a3f;
+  vertical-align: middle;
+}
+
+.app-page tr:last-child td {
+  border-bottom: none;
+}
+
+/* Etiquetas */
+
+.app-page .badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.app-page .badge.success { background: #11352d; color: #6ee7b7; }
+.app-page .badge.warning { background: #3b2a12; color: #fbbf24; }
+.app-page .badge.danger { background: #3f1d26; color: #fda4af; }
+.app-page .badge.info { background: #0c3044; color: #7dd3fc; }
+
+/* Formularios */
+
+.app-page .form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.app-page label.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #cbd5e1;
+  min-width: 0;
+}
+
+.app-page label.field small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.app-page input[type="number"],
+.app-page input[type="text"],
+.app-page select {
+  background: #0b1220;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 14px;
+  width: 100%;
+}
+
+.app-page input:focus,
+.app-page select:focus {
+  outline: 2px solid #0284c7;
+  outline-offset: 1px;
+}
+
+.app-page .checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.app-page .check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+
+.app-page .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 18px;
+}
+
+.app-page .btn {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 18px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #0284c7;
+  color: white;
+}
+
+.app-page .btn.secondary {
+  background: #1e293b;
+  color: #cbd5e1;
+  border: 1px solid #334155;
+}
+
+.app-page .btn.danger {
+  background: #b91c1c;
+}
+
+.app-page .btn.success {
+  background: #047857;
+}
+
+.app-page .btn.small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.app-page .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.app-page .feedback {
+  font-size: 13px;
+  color: #7dd3fc;
+}
+
+.app-page .error {
+  background: #3f1d26;
+  color: #fda4af;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+
+.app-page .note {
+  background: #0c2233;
+  border: 1px solid #12425e;
+  color: #bae6fd;
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Barra de progresso */
+
+.app-page .progress {
+  height: 8px;
+  background: #1e293b;
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 120px;
+}
+
+.app-page .progress > div {
+  height: 100%;
+  background: #38bdf8;
+  transition: width 0.5s;
+}
+
+.app-page .progress.done > div { background: #34d399; }
+.app-page .progress.failed > div { background: #fb7185; }
+
+.app-page pre.log {
+  background: #0b1220;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #94a3b8;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  margin: 10px 0 0;
+}
+
+@media (max-width: 900px) {
+  .app-page {
+    padding: 20px 16px;
+  }
+
+  .app-page .grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .app-page h1 {
+    font-size: 24px;
+  }
+}

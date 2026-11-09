@@ -99,6 +99,29 @@ const now = ref(Date.now())
 
 const history = ref<HistoryPoint[]>([])
 
+// Historico do InfluxDB: 'live' mostra as ultimas 30 leituras
+// recebidas pelo WebSocket; os demais periodos vem do banco.
+type HistoryPeriod = 'live' | '15m' | '1h' | '6h' | '24h'
+
+const HISTORY_PERIODS: { id: HistoryPeriod; label: string }[] = [
+  { id: 'live', label: 'Ao vivo' },
+  { id: '15m', label: '15 min' },
+  { id: '1h', label: '1 h' },
+  { id: '6h', label: '6 h' },
+  { id: '24h', label: '24 h' }
+]
+
+const historyPeriod = ref<HistoryPeriod>('live')
+const influxHistory = ref<HistoryPoint[]>([])
+const historyLoading = ref(false)
+const historyError = ref('')
+
+const chartPoints = computed(() =>
+  historyPeriod.value === 'live'
+    ? history.value
+    : influxHistory.value
+)
+
 let socket: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
@@ -317,11 +340,11 @@ const motorStatusClass = computed(() => {
 // ==========================================
 
 const temperatureChart = computed(() => ({
-  labels: history.value.map(item => item.time),
+  labels: chartPoints.value.map(item => item.time),
   datasets: [
     {
       label: 'Motor (°C)',
-      data: history.value.map(item => item.motor),
+      data: chartPoints.value.map(item => item.motor),
       borderColor: '#38bdf8',
       backgroundColor: 'rgba(56,189,248,0.12)',
       borderWidth: 2,
@@ -331,7 +354,7 @@ const temperatureChart = computed(() => ({
     },
     {
       label: 'Ambiente (°C)',
-      data: history.value.map(item => item.environment),
+      data: chartPoints.value.map(item => item.environment),
       borderColor: '#34d399',
       backgroundColor: 'rgba(52,211,153,0.05)',
       borderWidth: 2,
@@ -343,11 +366,11 @@ const temperatureChart = computed(() => ({
 }))
 
 const vibrationChart = computed(() => ({
-  labels: history.value.map(item => item.time),
+  labels: chartPoints.value.map(item => item.time),
   datasets: [
     {
       label: 'Vibração (mm/s)',
-      data: history.value.map(item => item.vibration),
+      data: chartPoints.value.map(item => item.vibration),
       borderColor: '#f59e0b',
       backgroundColor: 'rgba(245,158,11,0.12)',
       borderWidth: 2,
@@ -615,6 +638,82 @@ async function sendMotorCommand(
 }
 
 // ==========================================
+// HISTORICO (INFLUXDB)
+// ==========================================
+
+type InfluxPoint = Record<string, number | string | null> & { time: string }
+
+async function fetchHistory(deviceId: string, period: string) {
+  const response = await fetch(
+    `${API_URL}/api/history?device_id=${deviceId}&period=${period}`,
+    { headers: { Authorization: `Bearer ${props.session.token}` } }
+  )
+
+  if (!response.ok) {
+    throw new Error(`Histórico indisponível (HTTP ${response.status})`)
+  }
+
+  const data = await response.json()
+  return data.points as InfluxPoint[]
+}
+
+async function loadHistory(period: Exclude<HistoryPeriod, 'live'>) {
+  const [motorPoints, envPoints] = await Promise.all([
+    fetchHistory('motor-01', period),
+    fetchHistory('environment-01', period)
+  ])
+
+  const envByTime = new Map(
+    envPoints.map(point => [point.time, point.temperature_c as number | null])
+  )
+
+  const longPeriod = period === '6h' || period === '24h'
+
+  return motorPoints.map(point => {
+    const date = new Date(point.time)
+    return {
+      time: longPeriod
+        ? date.toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+        : date.toLocaleTimeString('pt-BR'),
+      motor: Number(point.temperature_c ?? 0),
+      vibration: Number(point.vibration_mm_s ?? 0),
+      environment: envByTime.get(point.time) ?? null
+    }
+  })
+}
+
+async function selectHistoryPeriod(period: HistoryPeriod) {
+  historyPeriod.value = period
+  historyError.value = ''
+
+  if (period === 'live') return
+
+  historyLoading.value = true
+
+  try {
+    influxHistory.value = await loadHistory(period)
+  } catch (error) {
+    historyError.value = error instanceof Error ? error.message : 'Erro ao carregar histórico'
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+// Ao abrir a pagina, preenche o modo ao vivo com os ultimos
+// 15 minutos do InfluxDB, em vez de comecar com o grafico vazio.
+async function prefillLiveHistory() {
+  try {
+    const points = await loadHistory('15m')
+
+    if (history.value.length < 30) {
+      history.value = [...points.slice(-(30 - history.value.length)), ...history.value]
+    }
+  } catch {
+    // Sem historico: o grafico enche com as leituras ao vivo.
+  }
+}
+
+// ==========================================
 // FORMATACAO
 // ==========================================
 
@@ -633,6 +732,7 @@ function formatInteger(value: number) {
 onMounted(() => {
   active = true
   connectWebSocket()
+  prefillLiveHistory()
 
   clockTimer = setInterval(() => {
     now.value = Date.now()
@@ -833,9 +933,28 @@ onUnmounted(() => {
 
         <section class="panel">
           <div class="panel-header">
-            <h2>Temperatura em tempo real</h2>
-            <span>Últimas 30 leituras</span>
+            <h2>Temperatura</h2>
+            <span>
+              {{
+                historyPeriod === 'live'
+                  ? 'Últimas 30 leituras'
+                  : `InfluxDB · médias por intervalo`
+              }}
+            </span>
           </div>
+          <div class="history-periods" role="group" aria-label="Período do histórico">
+            <button
+              v-for="period in HISTORY_PERIODS"
+              :key="period.id"
+              type="button"
+              :class="{ active: historyPeriod === period.id }"
+              :disabled="historyLoading"
+              @click="selectHistoryPeriod(period.id)"
+            >
+              {{ period.label }}
+            </button>
+          </div>
+          <p v-if="historyError" class="history-error">{{ historyError }}</p>
           <div class="chart-area">
             <Line
               :data="temperatureChart"
@@ -847,7 +966,10 @@ onUnmounted(() => {
         <section class="panel">
           <div class="panel-header">
             <h2>Vibração do motor</h2>
-            <span>mm/s</span>
+            <span>
+              mm/s ·
+              {{ HISTORY_PERIODS.find(item => item.id === historyPeriod)?.label }}
+            </span>
           </div>
           <div class="chart-area">
             <Line
@@ -1517,5 +1639,39 @@ footer {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+.history-periods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -6px 0 14px;
+}
+
+.history-periods button {
+  background: #0b1220;
+  color: #94a3b8;
+  border: 1px solid #334155;
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.history-periods button.active {
+  background: #0c4a6e;
+  border-color: #0284c7;
+  color: #e0f2fe;
+}
+
+.history-periods button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.history-error {
+  color: #fda4af;
+  font-size: 12px;
+  margin: 0 0 10px;
 }
 </style>

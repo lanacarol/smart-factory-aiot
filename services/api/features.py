@@ -644,6 +644,9 @@ async def handle_job_status(pool, event):
                 result = COALESCE(EXCLUDED.result, ai_jobs.result),
                 started_at = COALESCE(ai_jobs.started_at, EXCLUDED.started_at, NOW()),
                 finished_at = EXCLUDED.finished_at
+            -- Eventos podem chegar fora de ordem: um job concluido
+            -- ou com falha nunca volta para "executando".
+            WHERE ai_jobs.status NOT IN ('succeeded', 'failed')
             """,
             uuid.UUID(job_id),
             event.get("job_type", "generate"),
