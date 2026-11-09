@@ -148,6 +148,10 @@ services:
       OLLAMA_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
       MODEL_DIR: /app/models
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUXDB_ORG: ${INFLUXDB_ORG}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
     volumes:
       - ./ai/models:/app/models:ro
     depends_on:
@@ -192,6 +196,27 @@ services:
       MODEL_DIR: /app/models
     volumes:
       - ./ai/models:/app/models:ro
+      # Codigo unico de atributos, o mesmo usado no treino.
+      - ./ai/features.py:/app/features.py:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # Executa os jobs do Laboratorio de Dados e do Treinamento
+  # (filas q.jobs.generate e q.jobs.train). Um job por vez.
+  ai-jobs:
+    build: ./services/ai_jobs
+    restart: unless-stopped
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS}
+      AI_DIR: /app/ai
+    volumes:
+      - ./ai:/app/ai
+    # Limites para o treino nao travar a VM do Docker.
+    cpus: "3"
+    mem_limit: 3g
     depends_on:
       rabbitmq:
         condition: service_healthy

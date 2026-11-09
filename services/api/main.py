@@ -30,6 +30,7 @@ from auth import (
 )
 
 import assistant
+import features
 
 
 # ==========================================
@@ -53,6 +54,12 @@ QUEUE = os.getenv("WEBSOCKET_QUEUE", "q.telemetry.websocket")
 
 latest_events = {}
 latest_predictions = {}
+
+# Histerese dos alertas: o status previsto precisa se repetir
+# em N previsoes seguidas (N x 3 s) para abrir, mudar ou
+# resolver um alerta. Evita alertas piscando por ruido.
+ALERT_CONFIRMATIONS = int(os.getenv("ALERT_CONFIRMATIONS", "3"))
+_alert_streak = {}
 websocket_clients = set()
 
 
@@ -154,6 +161,15 @@ async def save_prediction_alert(pool, event):
         raise ValueError(
             "Valores de previsao invalidos"
         )
+
+    last_severity, streak = _alert_streak.get(
+        device_id, (None, 0)
+    )
+    streak = streak + 1 if severity == last_severity else 1
+    _alert_streak[device_id] = (severity, streak)
+
+    if streak < ALERT_CONFIRMATIONS:
+        return
 
     async with pool.acquire() as connection:
         async with connection.transaction():
@@ -314,6 +330,25 @@ async def process_event(message):
             logger.warning("Payload invalido")
             return
 
+        if event_type == "job_status":
+            try:
+                await features.handle_job_status(
+                    app.state.db_pool,
+                    event
+                )
+            except (ValueError, KeyError, TypeError):
+                logger.warning("Evento de job invalido")
+                return
+            except Exception:
+                # Nunca devolve o evento a fila: um erro aqui
+                # entraria em loop e travaria a telemetria.
+                logger.exception("Falha ao gravar status de job")
+                return
+
+            if websocket_clients:
+                await broadcast(event)
+            return
+
         if event_type not in (
             "telemetry",
             "state",
@@ -354,6 +389,7 @@ async def process_event(message):
                 return
 
             latest_predictions[device_id] = event
+            features.record_prediction(event)
 
             logger.info(
                 "IA recebida | %s | "
@@ -439,10 +475,24 @@ async def lifespan(app: FastAPI):
             durable=True
         )
 
+        # Filas dos jobs de IA (consumidas pelo worker
+        # ai-jobs). Declaradas aqui tambem para o publish
+        # obrigatorio nao falhar antes de o worker subir.
+        for job_type, job_queue in features.JOB_QUEUES.items():
+            declared = await channel.declare_queue(
+                job_queue,
+                durable=True
+            )
+            await declared.bind(
+                exchange,
+                routing_key=f"job.{job_type}"
+            )
+
         for routing_key in (
             "telemetry.#",
             "state.#",
-            "prediction.#"
+            "prediction.#",
+            "job.status.#"
         ):
             await queue.bind(
                 exchange,
@@ -500,7 +550,7 @@ app.add_middleware(
         "http://127.0.0.1:5174"
     ],
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=[
         "Content-Type",
         "Authorization"
@@ -512,6 +562,7 @@ app.add_middleware(
 # ==========================================
 
 app.include_router(auth_router)
+app.include_router(features.router)
 
 class ConveyorCommand(BaseModel):
     action: Literal["ON", "OFF"]

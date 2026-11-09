@@ -242,16 +242,28 @@ def _model_metrics():
         f"{split.get('test_motors')} teste"
     )
 
+    def metric(values, key):
+        # O treino grava MAE/RMSE/R2 em maiusculas.
+        return values.get(key, values.get(key.lower()))
+
     for name, info in metadata.get("targets", {}).items():
         test = info.get("test", {})
         base = info.get("baseline_test", {})
         lines.append(
             f"- modelo {name} (alvo {info.get('target')}): "
-            f"teste MAE={test.get('mae')}, RMSE={test.get('rmse')}, "
-            f"R2={test.get('r2')}; base que preve sempre a media: "
-            f"MAE={base.get('mae')}, RMSE={base.get('rmse')}, "
-            f"R2={base.get('r2')}"
+            f"teste MAE={metric(test, 'MAE')}, "
+            f"RMSE={metric(test, 'RMSE')}, R2={metric(test, 'R2')}; "
+            f"base que preve sempre a media: "
+            f"MAE={metric(base, 'MAE')}, RMSE={metric(base, 'RMSE')}, "
+            f"R2={metric(base, 'R2')}"
         )
+
+        top = info.get("importance") or []
+        if top:
+            lines.append(
+                "  variaveis mais importantes: "
+                + ", ".join(item["feature"] for item in top[:3])
+            )
 
     return "\n".join(lines)
 

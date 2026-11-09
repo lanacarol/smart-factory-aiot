@@ -37,7 +37,11 @@ MODEL_DIR = Path(
     os.getenv("MODEL_DIR", "/app/models")
 )
 
-FEATURES = [
+# Codigo de atributos compartilhado com o treino
+# (ai/features.py, montado no container).
+from features import FEATURE_SETS, WINDOW, latest_features
+
+RAW_FIELDS = [
     "cycle",
     "temperature_c",
     "vibration_mm_s",
@@ -49,37 +53,85 @@ FEATURES = [
 
 
 # ==========================================
-# CARREGAMENTO DOS MODELOS
+# CARREGAMENTO E RECARGA DOS MODELOS
 # ==========================================
 
-def carregar_modelos():
-    rul_path = MODEL_DIR / "rul_model.joblib"
-    health_path = MODEL_DIR / "health_model.joblib"
+class Modelos:
+    """Carrega os modelos e os recarrega sozinho quando o
+    metadata.json muda (novo treino), sem reiniciar o servico."""
 
-    if not rul_path.is_file():
-        raise FileNotFoundError(
-            f"Modelo RUL nao encontrado: {rul_path}"
+    def __init__(self):
+        self.metadata_mtime = None
+        self.version = "desconhecida"
+        self.feature_set = "instant"
+        self.rul = None
+        self.health = None
+        # Ultimas leituras por motor, para as janelas do passado.
+        self.buffers = {}
+        self.ultima_verificacao = 0.0
+        self.carregar()
+
+    def carregar(self):
+        metadata_path = MODEL_DIR / "metadata.json"
+
+        try:
+            metadata = json.loads(
+                metadata_path.read_text(encoding="utf-8")
+            )
+            mtime = metadata_path.stat().st_mtime
+        except (OSError, ValueError):
+            metadata, mtime = {}, None
+
+        rul_model = joblib.load(MODEL_DIR / "rul_model.joblib")
+        health_model = joblib.load(MODEL_DIR / "health_model.joblib")
+
+        feature_set = metadata.get("feature_set", "instant")
+
+        if feature_set not in FEATURE_SETS:
+            raise ValueError(f"Conjunto de atributos invalido: {feature_set}")
+
+        self.rul = rul_model
+        self.health = health_model
+        self.version = metadata.get("model_version", "1.0.0")
+        self.feature_set = feature_set
+        self.metadata_mtime = mtime
+
+        logging.info(
+            "Modelos carregados | versao %s | atributos %s",
+            self.version,
+            self.feature_set
         )
 
-    if not health_path.is_file():
-        raise FileNotFoundError(
-            f"Modelo HEALTH nao encontrado: {health_path}"
-        )
+    def recarregar_se_mudou(self):
+        agora = time.monotonic()
 
-    rul_model = joblib.load(rul_path)
-    health_model = joblib.load(health_path)
+        if agora - self.ultima_verificacao < 5:
+            return
 
-    logging.info("Modelo RUL carregado!")
-    logging.info("Modelo HEALTH carregado!")
+        self.ultima_verificacao = agora
 
-    return rul_model, health_model
+        try:
+            mtime = (MODEL_DIR / "metadata.json").stat().st_mtime
+        except OSError:
+            return
+
+        if mtime == self.metadata_mtime:
+            return
+
+        try:
+            self.carregar()
+            logging.info("Novo modelo em uso: %s", self.version)
+        except Exception:
+            # Mantem o modelo anterior se o novo nao carregar.
+            logging.exception("Falha ao recarregar modelos")
+            self.metadata_mtime = mtime
 
 
 # ==========================================
 # VALIDACAO DA TELEMETRIA
 # ==========================================
 
-def preparar_entradas(evento):
+def validar_leitura(evento):
     if not isinstance(evento, dict):
         raise ValueError("Evento invalido")
 
@@ -96,7 +148,7 @@ def preparar_entradas(evento):
 
     faltantes = [
         campo
-        for campo in FEATURES
+        for campo in RAW_FIELDS
         if campo not in payload
     ]
 
@@ -110,16 +162,16 @@ def preparar_entradas(evento):
             "O campo running deve ser booleano"
         )
 
-    entradas = {
+    leitura = {
         campo: payload[campo]
-        for campo in FEATURES
+        for campo in RAW_FIELDS
     }
 
-    entradas["running"] = int(
-        entradas["running"]
+    leitura["running"] = int(
+        leitura["running"]
     )
 
-    for campo, valor in entradas.items():
+    for campo, valor in leitura.items():
         if (
             not isinstance(valor, (int, float))
             or not (-float("inf") < float(valor) < float("inf"))
@@ -128,28 +180,34 @@ def preparar_entradas(evento):
                 f"Valor numerico invalido: {campo}"
             )
 
-    return pd.DataFrame(
-        [entradas],
-        columns=FEATURES
-    ).astype("float32")
+    return leitura
 
 
 # ==========================================
 # INFERENCIA
 # ==========================================
 
-def prever(evento, rul_model, health_model):
-    entradas = preparar_entradas(evento)
+def prever(evento, modelos):
+    leitura = validar_leitura(evento)
 
-    if entradas is None:
+    if leitura is None:
         return None
 
+    modelos.recarregar_se_mudou()
+
+    device_id = evento["device_id"]
+    buffer = modelos.buffers.setdefault(device_id, [])
+    buffer.append(leitura)
+    del buffer[:-WINDOW]
+
+    entradas = latest_features(buffer, modelos.feature_set)
+
     rul = float(
-        rul_model.predict(entradas)[0]
+        modelos.rul.predict(entradas)[0]
     )
 
     health = float(
-        health_model.predict(entradas)[0]
+        modelos.health.predict(entradas)[0]
     )
 
     rul = max(0.0, rul)
@@ -164,7 +222,7 @@ def prever(evento, rul_model, health_model):
 
     resultado = {
         "event_id": str(uuid.uuid4()),
-        "device_id": evento["device_id"],
+        "device_id": device_id,
         "timestamp": datetime.now(
             timezone.utc
         ).isoformat(),
@@ -174,10 +232,9 @@ def prever(evento, rul_model, health_model):
             "rul_cycles": round(rul, 2),
             "health_percent": round(health, 2),
             "maintenance_status": status,
-            "model_version": "1.0.0",
-            "cycle": int(
-                entradas["cycle"].iloc[0]
-            )
+            "model_version": modelos.version,
+            "feature_set": modelos.feature_set,
+            "cycle": int(leitura["cycle"])
         }
     }
 
@@ -241,7 +298,7 @@ def conectar_rabbitmq():
 # ==========================================
 
 def main():
-    rul_model, health_model = carregar_modelos()
+    modelos = Modelos()
 
     while True:
         connection = None
@@ -266,8 +323,7 @@ def main():
 
                     resultado = prever(
                         evento,
-                        rul_model,
-                        health_model
+                        modelos
                     )
 
                 except (

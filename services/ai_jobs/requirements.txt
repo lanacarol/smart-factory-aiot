@@ -1,0 +1,7 @@
+pika>=1.3,<2
+numpy>=2.0,<3
+pandas>=2.2,<4
+# Mesma versao da inferencia: o modelo salvo aqui e carregado la.
+scikit-learn==1.9.1
+joblib>=1.4,<2
+matplotlib>=3.9,<4
