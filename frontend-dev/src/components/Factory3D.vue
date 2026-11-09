@@ -11,6 +11,8 @@ const props = defineProps<{
   ambientTemperature: number
   humidity: number
   online: boolean
+  // Status previsto pela IA (healthy | warning | critical)
+  aiStatus?: string
 }>()
 
 const container = ref<HTMLDivElement | null>(null)
@@ -22,6 +24,8 @@ let renderer: THREE.WebGLRenderer
 let fanBlades: THREE.Group
 let beltMarkers: THREE.Mesh[] = []
 let motorMaterial: THREE.MeshStandardMaterial
+let motorGroup: THREE.Group
+const MOTOR_BASE = new THREE.Vector3(-3.6, 0.55, 0.5)
 let floorMaterial: THREE.MeshStandardMaterial
 let animationId = 0
 let observer: ResizeObserver
@@ -125,7 +129,8 @@ function createFactory() {
   // Motor industrial
   const motor = new THREE.Group()
   motor.userData.device = 'motor'
-  motor.position.set(-3.6, 0.55, 0.5)
+  motor.position.copy(MOTOR_BASE)
+  motorGroup = motor
   scene.add(motor)
 
   const motorBody = createBox(
@@ -205,16 +210,33 @@ function updateSimulation(delta: number) {
     fanBlades.rotation.z -= delta * 5
   }
 
-  // Cor do motor baseada na temperatura recebida.
+  // Cor do motor: temperatura recebida ou status da IA,
+  // o que for mais grave.
   if (!isActive) {
     motorMaterial.color.set('#64748b')
-  } else if (props.motorTemperature >= 85) {
+  } else if (
+    props.aiStatus === 'critical' ||
+    props.motorTemperature >= 85
+  ) {
     motorMaterial.color.set('#ef4444')
-  } else if (props.motorTemperature >= 70) {
+  } else if (
+    props.aiStatus === 'warning' ||
+    props.motorTemperature >= 70
+  ) {
     motorMaterial.color.set('#f59e0b')
   } else {
     motorMaterial.color.set('#22c55e')
   }
+
+  // Motor treme proporcionalmente a vibracao (mm/s).
+  const shake = isActive
+    ? Math.max(0, props.vibration - 1) * 0.012
+    : 0
+  motorGroup.position.set(
+    MOTOR_BASE.x + (Math.random() - 0.5) * shake,
+    MOTOR_BASE.y + (Math.random() - 0.5) * shake,
+    MOTOR_BASE.z + (Math.random() - 0.5) * shake
+  )
 
   // Ambiente reage à temperatura e à umidade simuladas.
   const hot = isActive && props.ambientTemperature >= 35
@@ -285,7 +307,12 @@ function handleClick(event: MouseEvent) {
           : 'Sem dados'
       }`
     } else if (device === 'motor') {
-      selected.value = `Motor: ${props.motorTemperature.toFixed(1)} °C · Vibração: ${props.vibration.toFixed(2)} mm/s`
+      const ia: Record<string, string> = {
+        healthy: 'Saudável',
+        warning: 'Atenção',
+        critical: 'Crítico'
+      }
+      selected.value = `Motor: ${props.motorTemperature.toFixed(1)} °C · Vibração: ${props.vibration.toFixed(2)} mm/s · IA: ${ia[props.aiStatus ?? ''] ?? 'sem previsão'}`
     } else if (device === 'fan') {
       selected.value = `Ventilador: ${
         props.online

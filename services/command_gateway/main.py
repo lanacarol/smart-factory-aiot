@@ -16,7 +16,17 @@ RABBITMQ_USER = os.environ["RABBITMQ_USER"]
 RABBITMQ_PASSWORD = os.environ["RABBITMQ_PASSWORD"]
 
 QUEUE = "q.commands.device"
-MQTT_TOPIC = "factory/conveyor/01/command"
+# Dispositivo -> (topico MQTT, acoes aceitas)
+DEVICES = {
+    "conveyor-01": (
+        "factory/conveyor/01/command",
+        ("ON", "OFF")
+    ),
+    "motor-01": (
+        "factory/motor/01/command",
+        ("INJECT_FAULT", "MAINTENANCE")
+    ),
+}
 
 
 def conectar_mqtt():
@@ -78,15 +88,19 @@ def main():
                 try:
                     mensagem = json.loads(body.decode("utf-8"))
 
+                    device_id = mensagem.get("device_id")
+
                     if (
                         mensagem.get("type") != "command"
-                        or mensagem.get("device_id") != "conveyor-01"
+                        or device_id not in DEVICES
                     ):
                         raise ValueError("Comando para dispositivo invalido")
 
+                    topic, allowed = DEVICES[device_id]
+
                     action = mensagem["payload"]["action"]
 
-                    if action not in ("ON", "OFF"):
+                    if action not in allowed:
                         raise ValueError("Acao invalida")
 
                     if not client.is_connected():
@@ -95,7 +109,7 @@ def main():
                     comando = json.dumps({"action": action})
 
                     result = client.publish(
-                        MQTT_TOPIC,
+                        topic,
                         comando,
                         qos=1
                     )
@@ -106,7 +120,7 @@ def main():
                         raise RuntimeError("Falha na publicacao MQTT")
 
                     print(
-                        f"RabbitMQ -> MQTT | Esteira: {action}",
+                        f"RabbitMQ -> MQTT | {device_id}: {action}",
                         flush=True
                     )
 

@@ -20,6 +20,7 @@ PASSWORD = os.environ["MQTT_SIMULATOR_PASSWORD"]
 MOTOR_TOPIC = "factory/motor/01/telemetry"
 ENV_TOPIC = "factory/environment/01/telemetry"
 CONVEYOR_COMMAND = "factory/conveyor/01/command"
+MOTOR_COMMAND = "factory/motor/01/command"
 CONVEYOR_STATE = "factory/conveyor/01/state"
 FAN_STATE = "factory/fan/01/state"
 
@@ -34,6 +35,12 @@ fan_on = False
 temperature = 32.0
 wear = 0.0
 cycle_count = 0
+
+# Falha injetada pela interface: o motor passa a se
+# desgastar muito mais rapido (ex.: rolamento danificado).
+# A manutencao zera o desgaste e encerra a falha.
+fault_active = False
+FAULT_EXTRA_CYCLES = 60
 
 
 # ==========================================
@@ -75,8 +82,7 @@ def on_connect(client, userdata, flags, reason_code, properties):
         )
 
         client.subscribe(
-            CONVEYOR_COMMAND,
-            qos=1
+            [(CONVEYOR_COMMAND, 1), (MOTOR_COMMAND, 1)]
         )
 
     else:
@@ -90,6 +96,25 @@ def on_connect(client, userdata, flags, reason_code, properties):
 # RECEBIMENTO DE COMANDOS
 # ==========================================
 
+def on_motor_command(action):
+    global fault_active
+    global cycle_count
+    global wear
+
+    if action == "INJECT_FAULT":
+        fault_active = True
+        print("MOTOR: FALHA INJETADA", flush=True)
+
+    elif action == "MAINTENANCE":
+        fault_active = False
+        cycle_count = 0
+        wear = 0.0
+        print("MOTOR: MANUTENCAO REALIZADA", flush=True)
+
+    else:
+        print("Comando de motor invalido", flush=True)
+
+
 def on_message(client, userdata, msg):
     global conveyor_on
 
@@ -99,6 +124,10 @@ def on_message(client, userdata, msg):
         )
 
         action = command.get("action")
+
+        if msg.topic == MOTOR_COMMAND:
+            on_motor_command(action)
+            return
 
         if action not in ["ON", "OFF"]:
             print(
@@ -207,6 +236,9 @@ def main():
             if conveyor_on:
                 cycle_count += 1
 
+                if fault_active:
+                    cycle_count += FAULT_EXTRA_CYCLES
+
                 wear = min(
                     1.0,
                     cycle_count / 4600
@@ -220,6 +252,7 @@ def main():
                 temperature
                 + (30 if conveyor_on else 4)
                 + wear * 18
+                + (6 if fault_active and conveyor_on else 0)
                 + random.uniform(-1, 1)
             )
 
@@ -231,6 +264,7 @@ def main():
                 (
                     1.5
                     + wear * 6
+                    + (2.5 if fault_active else 0)
                     + random.uniform(-0.3, 0.3)
                 )
                 if conveyor_on
@@ -279,6 +313,7 @@ def main():
                         temperature, 2
                     ),
                     "humidity_percent": humidity,
+                    "fault_active": fault_active,
                 }
             )
 
@@ -338,7 +373,8 @@ def main():
                 f"| Temperatura: {temperature:.2f} C "
                 f"| Umidade: {humidity:.2f}% "
                 f"| Ciclos: {cycle_count} "
-                f"| Desgaste: {wear:.3f}",
+                f"| Desgaste: {wear:.3f}"
+                f"{' | FALHA ATIVA' if fault_active else ''}",
                 flush=True
             )
 

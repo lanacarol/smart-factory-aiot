@@ -517,6 +517,10 @@ class ConveyorCommand(BaseModel):
     action: Literal["ON", "OFF"]
 
 
+class MotorCommand(BaseModel):
+    action: Literal["INJECT_FAULT", "MAINTENANCE"]
+
+
 class AssistantQuestion(BaseModel):
     question: str = Field(
         min_length=2,
@@ -651,23 +655,18 @@ async def ai_prediction_device(device_id: str):
 # COMANDO DA ESTEIRA + POSTGRESQL
 # ==========================================
 
-@app.post(
-    "/api/conveyor/command",
-    dependencies=[
-        Depends(require_roles("admin", "operator"))
-    ]
-)
-async def conveyor_command(
-    command: ConveyorCommand
-):
+async def send_device_command(device_id, action):
+    """Registra o comando no PostgreSQL e o publica
+    no RabbitMQ; o command-gateway leva ao MQTT."""
+
     event_id = uuid.uuid4()
 
     event = {
         "event_id": str(event_id),
-        "device_id": "conveyor-01",
+        "device_id": device_id,
         "type": "command",
         "payload": {
-            "action": command.action
+            "action": action
         }
     }
 
@@ -685,8 +684,8 @@ async def conveyor_command(
                 VALUES ($1, $2, $3, 'queued')
                 """,
                 event_id,
-                "conveyor-01",
-                command.action
+                device_id,
+                action
             )
 
     except Exception:
@@ -715,7 +714,7 @@ async def conveyor_command(
                 message_id=str(event_id)
             ),
             routing_key=(
-                "command.factory.actuator.conveyor-01"
+                f"command.factory.actuator.{device_id}"
             ),
             mandatory=True
         )
@@ -743,16 +742,50 @@ async def conveyor_command(
         )
 
     logger.info(
-        "Comando registrado | %s | %s",
+        "Comando registrado | %s | %s | %s",
         event_id,
-        command.action
+        device_id,
+        action
     )
 
     return {
         "status": "queued",
-        "action": command.action,
+        "action": action,
         "event_id": str(event_id)
     }
+
+
+@app.post(
+    "/api/conveyor/command",
+    dependencies=[
+        Depends(require_roles("admin", "operator"))
+    ]
+)
+async def conveyor_command(
+    command: ConveyorCommand
+):
+    return await send_device_command(
+        "conveyor-01",
+        command.action
+    )
+
+
+# Demonstracao de manutencao preditiva:
+# INJECT_FAULT acelera o desgaste do motor no simulador;
+# MAINTENANCE zera o desgaste e encerra a falha.
+@app.post(
+    "/api/motor/command",
+    dependencies=[
+        Depends(require_roles("admin", "operator"))
+    ]
+)
+async def motor_command(
+    command: MotorCommand
+):
+    return await send_device_command(
+        "motor-01",
+        command.action
+    )
 
 
 # ==========================================

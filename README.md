@@ -136,6 +136,15 @@ O frontend permite:
 
 O gêmeo digital foi desenvolvido com Three.js e representa visualmente o motor, a esteira e o ventilador.
 
+### Injeção de falha (demonstração)
+
+O cartão **Teste de falha do motor** no dashboard (perfis admin e operator) envia comandos ao motor pelo mesmo caminho da esteira: API → RabbitMQ → command-gateway → MQTT → simulador.
+
+- **Injetar falha**: simula um rolamento danificado. O motor passa a se desgastar cerca de 60 ciclos a cada leitura, com mais vibração e temperatura. Em cerca de 80 s a IA passa para *Atenção* e em cerca de 150 s para *Crítico*; os alertas são abertos no PostgreSQL e o motor fica laranja/vermelho no gêmeo digital, tremendo conforme a vibração.
+- **Registrar manutenção**: encerra a falha e zera o desgaste.
+
+Bancos criados antes desta função precisam da migração `infra/postgres/migrations/001-motor-commands.sql`, que libera as novas ações na tabela `command_history`.
+
 ### Assistente com LLM local
 
 A aba **Assistente** é um chat que responde em linguagem natural sobre o estado atual da fábrica, as previsões da IA, os alertas abertos, as métricas do último treino e a arquitetura.
@@ -274,6 +283,7 @@ http://localhost:5173
 | `GET /api/alerts` | Alertas armazenados |
 | `GET /api/commands/history` | Histórico de comandos |
 | `POST /api/conveyor/command` | Solicitação de ON/OFF da esteira |
+| `POST /api/motor/command` | Injeção de falha (`INJECT_FAULT`) ou manutenção (`MAINTENANCE`) do motor |
 | `GET /api/assistant/status` | Estado do LLM local (baixando, carregando, pronto) |
 | `POST /api/assistant/chat` | Pergunta ao assistente (resposta em streaming) |
 | `WS /ws/factory` | Atualizações em tempo real |

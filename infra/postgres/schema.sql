@@ -69,7 +69,7 @@ CREATE TABLE public.command_history (
     requested_at timestamp with time zone DEFAULT now() NOT NULL,
     executed_at timestamp with time zone,
     error_message text,
-    CONSTRAINT chk_command_action CHECK (((action)::text = ANY ((ARRAY['ON'::character varying, 'OFF'::character varying])::text[]))),
+    CONSTRAINT chk_command_action CHECK (((action)::text = ANY ((ARRAY['ON'::character varying, 'OFF'::character varying, 'INJECT_FAULT'::character varying, 'MAINTENANCE'::character varying])::text[]))),
     CONSTRAINT chk_command_status CHECK (((status)::text = ANY ((ARRAY['queued'::character varying, 'executed'::character varying, 'failed'::character varying])::text[])))
 );
 

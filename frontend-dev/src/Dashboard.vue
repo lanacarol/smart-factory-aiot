@@ -128,6 +128,14 @@ const motorRunning = computed(
   () => motor.value?.running === true
 )
 
+// Falha injetada pela interface (desgaste acelerado).
+const faultActive = computed(
+  () => motor.value?.fault_active === true
+)
+
+const motorCommandLoading = ref(false)
+const motorFeedback = ref('')
+
 // ==========================================
 // ATUALIZACOES E CONEXAO
 // ==========================================
@@ -551,6 +559,62 @@ async function sendCommand(action: 'ON' | 'OFF') {
 }
 
 // ==========================================
+// INJECAO DE FALHA E MANUTENCAO DO MOTOR
+// ==========================================
+
+async function sendMotorCommand(
+  action: 'INJECT_FAULT' | 'MAINTENANCE'
+) {
+  if (!canControl.value || motorCommandLoading.value) {
+    return
+  }
+
+  motorCommandLoading.value = true
+  motorFeedback.value = ''
+
+  try {
+    const response = await fetch(
+      `${API_URL}/api/motor/command`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${props.session.token}`
+        },
+        body: JSON.stringify({ action })
+      }
+    )
+
+    if (!response.ok) {
+      if (response.status === 403) {
+        throw new Error('Permissão insuficiente')
+      }
+
+      if (response.status === 401) {
+        throw new Error('Sessão inválida ou expirada')
+      }
+
+      throw new Error(`Erro HTTP ${response.status}`)
+    }
+
+    motorFeedback.value =
+      action === 'INJECT_FAULT'
+        ? 'Falha injetada. Acompanhe a saúde prevista pela IA cair.'
+        : 'Manutenção registrada. O desgaste do motor foi zerado.'
+
+  } catch (error) {
+    console.error(error)
+
+    motorFeedback.value =
+      error instanceof Error
+        ? error.message
+        : 'Erro ao enviar comando.'
+  } finally {
+    motorCommandLoading.value = false
+  }
+}
+
+// ==========================================
 // FORMATACAO
 // ==========================================
 
@@ -877,6 +941,57 @@ onUnmounted(() => {
 
         <article class="panel device">
           <div class="device-top">
+            <div class="device-icon">⚙️</div>
+            <span
+              class="status"
+              :class="motorOnline && !faultActive ? 'on' : 'off'"
+            >
+              {{
+                !motorOnline
+                  ? 'Sem dados'
+                  : faultActive
+                    ? 'Falha ativa'
+                    : 'Normal'
+              }}
+            </span>
+          </div>
+
+          <h3>Teste de falha do motor</h3>
+          <p>
+            Simula um rolamento danificado: o motor passa
+            a se desgastar muito mais rápido e a IA deve
+            detectar a queda de saúde.
+          </p>
+
+          <div class="buttons">
+            <button
+              class="btn-red"
+              :disabled="motorCommandLoading || !motorOnline || !canControl || faultActive"
+              @click="sendMotorCommand('INJECT_FAULT')"
+            >
+              Injetar falha
+            </button>
+
+            <button
+              class="btn-green"
+              :disabled="motorCommandLoading || !motorOnline || !canControl"
+              @click="sendMotorCommand('MAINTENANCE')"
+            >
+              Registrar manutenção
+            </button>
+          </div>
+
+          <p v-if="!canControl" class="permission-note">
+            Seu perfil possui acesso somente para visualização.
+          </p>
+
+          <p v-if="motorFeedback" class="feedback">
+            {{ motorFeedback }}
+          </p>
+        </article>
+
+        <article class="panel device">
+          <div class="device-top">
             <div class="device-icon">💨</div>
             <span
               class="status"
@@ -920,6 +1035,7 @@ onUnmounted(() => {
         :ambient-temperature="ambient"
         :humidity="humidity"
         :online="online"
+        :ai-status="predictionOnline ? prediction?.payload.maintenance_status : undefined"
       />
 
       <footer>
