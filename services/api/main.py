@@ -1,11 +1,12 @@
 
+import asyncio
 import json
 import logging
 import os
 import uuid
 import httpx
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Literal
 
 import aio_pika
@@ -19,13 +20,16 @@ from fastapi import (
     WebSocketDisconnect
 )
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from auth import router as auth_router
 from auth import (
     get_current_user,
     require_roles,
     authorize_websocket
 )
+
+import assistant
 
 
 # ==========================================
@@ -399,6 +403,12 @@ async def lifespan(app: FastAPI):
 
     logger.info("PostgreSQL conectado!")
 
+    # Baixa (se preciso) e pre-carrega o LLM local
+    # em segundo plano, sem travar a API.
+    llm_task = asyncio.create_task(
+        assistant.prepare_model()
+    )
+
     connection = None
 
     try:
@@ -455,6 +465,11 @@ async def lifespan(app: FastAPI):
         yield
 
     finally:
+        llm_task.cancel()
+
+        with suppress(asyncio.CancelledError):
+            await llm_task
+
         if connection:
             await connection.close()
 
@@ -500,6 +515,13 @@ app.include_router(auth_router)
 
 class ConveyorCommand(BaseModel):
     action: Literal["ON", "OFF"]
+
+
+class AssistantQuestion(BaseModel):
+    question: str = Field(
+        min_length=2,
+        max_length=500
+    )
 
 
 # ==========================================
@@ -731,6 +753,97 @@ async def conveyor_command(
         "action": command.action,
         "event_id": str(event_id)
     }
+
+
+# ==========================================
+# ASSISTENTE COM LLM LOCAL
+# ==========================================
+
+@app.get(
+    "/api/assistant/status",
+    dependencies=[Depends(get_current_user)],
+    tags=["Assistente"]
+)
+async def assistant_status():
+    return assistant.status
+
+
+@app.post(
+    "/api/assistant/chat",
+    tags=["Assistente"]
+)
+async def assistant_chat(
+    body: AssistantQuestion,
+    user=Depends(get_current_user)
+):
+    if not assistant.is_ready():
+        raise HTTPException(
+            503,
+            "O modelo ainda esta carregando"
+        )
+
+    # Limite de perguntas por minuto, por usuario.
+    username = user["username"]
+
+    if not assistant.allow_request(username):
+        raise HTTPException(
+            429,
+            "Limite de perguntas por minuto atingido"
+        )
+
+    question = body.question.strip()
+    pool = app.state.db_pool
+
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO audit_logs (
+                    action,
+                    entity_type,
+                    details
+                )
+                VALUES (
+                    'assistant_question',
+                    'assistant',
+                    $1::jsonb
+                )
+                """,
+                json.dumps({
+                    "question": question,
+                    "username": username,
+                    "role": user["role"],
+                    "model": assistant.OLLAMA_MODEL
+                })
+            )
+
+        devices = await list_devices(pool)
+        alerts = await list_alerts(pool)
+
+    except Exception:
+        logger.exception(
+            "Falha ao preparar pergunta do assistente"
+        )
+        raise HTTPException(
+            503,
+            "PostgreSQL indisponivel"
+        )
+
+    context = assistant.build_context(
+        latest_events,
+        latest_predictions,
+        alerts,
+        devices
+    )
+
+    return StreamingResponse(
+        assistant.stream_answer(context, question),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 # ==========================================

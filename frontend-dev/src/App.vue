@@ -5,6 +5,7 @@ import { ref } from 'vue'
 import LoginScreen from './components/LoginScreen.vue'
 import Dashboard from './Dashboard.vue'
 import Mensageria from './components/Mensageria.vue'
+import AssistantChat from './components/AssistantChat.vue'
 
 // ==========================================
 // TIPOS
@@ -18,7 +19,7 @@ type Session = {
   role: Role
 }
 
-type Page = 'dashboard' | 'mensageria'
+type Page = 'dashboard' | 'mensageria' | 'assistente'
 
 // ==========================================
 // AUTENTICACAO
@@ -121,6 +122,16 @@ function logout() {
           Mensageria
         </button>
 
+        <button
+          type="button"
+          class="nav-button"
+          :class="{ active: activePage === 'assistente' }"
+          @click="navigate('assistente')"
+        >
+          <span>💬</span>
+          Assistente
+        </button>
+
       </div>
 
     </nav>
@@ -136,6 +147,12 @@ function logout() {
 
       <Mensageria
         v-else-if="activePage === 'mensageria'"
+        :token="session.token"
+      />
+
+      <AssistantChat
+        v-else-if="activePage === 'assistente'"
+        api-url="http://localhost:8001"
         :token="session.token"
       />
 

@@ -21,8 +21,17 @@ services:
       AUTH_ENABLED: "true"
       JWT_SECRET_DEV: ${JWT_SECRET_DEV:?Defina JWT_SECRET_DEV no arquivo .env}
 
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      MODEL_DIR: /app/models
+
+    volumes:
+      - ./ai/models:/app/models:ro
+
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      ollama:
+        condition: service_started

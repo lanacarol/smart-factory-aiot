@@ -145,11 +145,37 @@ services:
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS}
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      MODEL_DIR: /app/models
+    volumes:
+      - ./ai/models:/app/models:ro
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      ollama:
+        condition: service_started
+
+  # LLM local para o assistente. Sem porta publicada:
+  # so a API conversa com ele, pela rede interna.
+  ollama:
+    image: ollama/ollama:0.6.2
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: "-1"
+      OLLAMA_NUM_PARALLEL: "1"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test:
+        - CMD
+        - ollama
+        - list
+      interval: 15s
+      timeout: 10s
+      retries: 10
 
   ai-inference:
     build: ./services/ai_inference
@@ -171,3 +197,4 @@ volumes:
   influxdb_data:
   influxdb_config:
   mosquitto_data:
+  ollama_data:

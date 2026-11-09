@@ -31,6 +31,7 @@ Desenvolver uma solução de Smart Factory capaz de:
 | Banco de séries temporais | InfluxDB |
 | Banco de dados relacional | PostgreSQL |
 | Inteligência artificial | Python, Scikit-learn |
+| LLM local | Ollama com `llama3.2:3b` (CPU) |
 | Infraestrutura | Docker, Docker Compose |
 
 ## 3. Arquitetura do sistema
@@ -135,6 +136,19 @@ O frontend permite:
 
 O gêmeo digital foi desenvolvido com Three.js e representa visualmente o motor, a esteira e o ventilador.
 
+### Assistente com LLM local
+
+A aba **Assistente** é um chat que responde em linguagem natural sobre o estado atual da fábrica, as previsões da IA, os alertas abertos, as métricas do último treino e a arquitetura.
+
+- O LLM (`llama3.2:3b`) roda no container `ollama`, em CPU, sem chave de API e sem enviar dados para a nuvem. O container não tem porta publicada: só a API conversa com ele.
+- O LLM nunca acessa os bancos. A API monta um resumo pronto (leituras, previsões, alertas do PostgreSQL e `ai/models/metadata.json`) e envia junto da pergunta. Não há ferramentas (tool calling).
+- Ao subir, a API baixa o modelo (só na primeira vez, cerca de 2 GB) e já o carrega na memória. A interface mostra "Baixando/Carregando o modelo" até ele ficar pronto.
+- A resposta chega em streaming. A saída do LLM é tratada como texto não confiável: o Markdown é renderizado com todo HTML escapado e sem imagens ou links.
+- Exige login (qualquer perfil). Limite de 6 perguntas por minuto por usuário (`ASSISTANT_RATE_LIMIT`), e cada pergunta é registrada em `audit_logs` com a ação `assistant_question`, o usuário e o perfil.
+- No ambiente de desenvolvimento, a aba fica no `frontend-dev` (porta 5174) e usa a `api-dev` (porta 8001).
+
+Recomenda-se pelo menos 8 GB de memória para o Docker/WSL2.
+
 ## 7. Banco de dados PostgreSQL
 
 O sistema utiliza cinco tabelas principais:
@@ -232,6 +246,8 @@ docker compose up -d --build
 
 Na primeira inicialização de um banco PostgreSQL vazio, os arquivos `schema.sql` e `seed.sql` criam automaticamente as tabelas e os equipamentos.
 
+Na primeira vez, a API também baixa o modelo do assistente (`llama3.2:3b`, cerca de 2 GB) para o volume `ollama_data`. O progresso aparece na aba Assistente e em `GET /api/assistant/status`.
+
 ### Inicializar o frontend
 
 Em outro terminal:
@@ -258,6 +274,8 @@ http://localhost:5173
 | `GET /api/alerts` | Alertas armazenados |
 | `GET /api/commands/history` | Histórico de comandos |
 | `POST /api/conveyor/command` | Solicitação de ON/OFF da esteira |
+| `GET /api/assistant/status` | Estado do LLM local (baixando, carregando, pronto) |
+| `POST /api/assistant/chat` | Pergunta ao assistente (resposta em streaming) |
 | `WS /ws/factory` | Atualizações em tempo real |
 
 Documentação interativa da API:
