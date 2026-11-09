@@ -1,0 +1,25 @@
+
+:root {
+  font-family: Inter, Arial, sans-serif;
+  color: #e2e8f0;
+  background: #0b1220;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #0b1220;
+  color: #e2e8f0;
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+}
+
+h1, h2, h3, p {
+  color: inherit;
+}

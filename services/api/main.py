@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import uuid
+import httpx
 
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -12,12 +13,19 @@ import asyncpg
 
 from fastapi import (
     FastAPI,
+    Depends,
     HTTPException,
     WebSocket,
     WebSocketDisconnect
 )
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from auth import router as auth_router
+from auth import (
+    get_current_user,
+    require_roles,
+    authorize_websocket
+)
 
 
 # ==========================================
@@ -37,7 +45,7 @@ POSTGRES_PASSWORD = os.environ["POSTGRES_PASSWORD"]
 POSTGRES_DB = os.environ["POSTGRES_DB"]
 
 EXCHANGE = "factory.topic"
-QUEUE = "q.telemetry.websocket"
+QUEUE = os.getenv("WEBSOCKET_QUEUE", "q.telemetry.websocket")
 
 latest_events = {}
 latest_predictions = {}
@@ -467,17 +475,28 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "http://127.0.0.1:5173"
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174"
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"]
+    allow_headers=[
+        "Content-Type",
+        "Authorization"
+    ]
 )
 
+# ==========================================
+# AUTENTICACAO
+# ==========================================
+
+app.include_router(auth_router)
 
 class ConveyorCommand(BaseModel):
     action: Literal["ON", "OFF"]
@@ -540,7 +559,10 @@ async def factory_state():
 # ROTAS POSTGRESQL
 # ==========================================
 
-@app.get("/api/devices")
+@app.get(
+    "/api/devices",
+    dependencies=[Depends(get_current_user)]
+)
 async def get_devices():
     result = await list_devices(
         app.state.db_pool
@@ -607,7 +629,12 @@ async def ai_prediction_device(device_id: str):
 # COMANDO DA ESTEIRA + POSTGRESQL
 # ==========================================
 
-@app.post("/api/conveyor/command")
+@app.post(
+    "/api/conveyor/command",
+    dependencies=[
+        Depends(require_roles("admin", "operator"))
+    ]
+)
 async def conveyor_command(
     command: ConveyorCommand
 ):
@@ -714,6 +741,9 @@ async def conveyor_command(
 async def factory_websocket(
     websocket: WebSocket
 ):
+    if not await authorize_websocket(websocket):
+        return
+
     await websocket.accept()
     websocket_clients.add(websocket)
 
@@ -734,3 +764,61 @@ async def factory_websocket(
         websocket_clients.discard(
             websocket
         )
+
+
+# ==========================================
+# MENSAGERIA - RABBITMQ
+# ==========================================
+
+@app.get(
+    "/api/messaging/queues",
+    dependencies=[Depends(get_current_user)],
+    tags=["Mensageria"]
+)
+async def get_messaging_queues():
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                "http://rabbitmq:15672/api/queues/%2F",
+                auth=(
+                    RABBITMQ_USER,
+                    RABBITMQ_PASSWORD
+                )
+            )
+
+            response.raise_for_status()
+            queues_data = response.json()
+
+    except (httpx.HTTPError, ValueError):
+        logger.exception(
+            "Falha ao consultar RabbitMQ Management"
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail="Nao foi possivel consultar as filas"
+        )
+
+    queues = []
+
+    for queue in queues_data:
+        queues.append({
+            "name": queue.get("name"),
+            "state": queue.get("state", "unknown"),
+            "messages": queue.get("messages", 0),
+            "messages_ready": queue.get(
+                "messages_ready", 0
+            ),
+            "messages_unacknowledged": queue.get(
+                "messages_unacknowledged", 0
+            ),
+            "consumers": queue.get("consumers", 0)
+        })
+
+    queues.sort(key=lambda item: item["name"] or "")
+
+    return {
+        "total": len(queues),
+        "queues": queues
+    }
