@@ -380,9 +380,9 @@ onUnmounted(() => {
     </div>
 
     <div class="factory-legend">
-      <span>🟢 Normal</span>
-      <span>🟠 Temperatura elevada</span>
-      <span>🔴 Temperatura crítica</span>
+      <span><i class="legend-dot normal"></i> Normal</span>
+      <span><i class="legend-dot warning"></i> Atenção (temperatura ou IA)</span>
+      <span><i class="legend-dot critical"></i> Crítico (temperatura ou IA)</span>
     </div>
 
     <p class="factory-note">
@@ -477,4 +477,17 @@ onUnmounted(() => {
     height: 310px;
   }
 }
+
+.legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
+.legend-dot.normal { background: #22c55e; }
+.legend-dot.warning { background: #f59e0b; }
+.legend-dot.critical { background: #ef4444; }
 </style>

@@ -32,14 +32,14 @@ type Page =
   | 'mensageria'
   | 'assistente'
 
-const PAGES: { id: Page; icon: string; label: string }[] = [
-  { id: 'dashboard', icon: '📊', label: 'Dashboard' },
-  { id: 'insights', icon: '🔎', label: 'Insights' },
-  { id: 'laboratorio', icon: '🧪', label: 'Laboratório' },
-  { id: 'treinamento', icon: '🧠', label: 'Treinamento' },
-  { id: 'dispositivos', icon: '🏭', label: 'Dispositivos' },
-  { id: 'mensageria', icon: '📨', label: 'Mensageria' },
-  { id: 'assistente', icon: '💬', label: 'Assistente' }
+const PAGES: { id: Page; label: string }[] = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'insights', label: 'Insights' },
+  { id: 'laboratorio', label: 'Laboratório' },
+  { id: 'treinamento', label: 'Treinamento' },
+  { id: 'dispositivos', label: 'Dispositivos' },
+  { id: 'mensageria', label: 'Mensageria' },
+  { id: 'assistente', label: 'Assistente' }
 ]
 
 // ==========================================
@@ -131,7 +131,6 @@ function logout() {
           :class="{ active: activePage === page.id }"
           @click="navigate(page.id)"
         >
-          <span>{{ page.icon }}</span>
           {{ page.label }}
         </button>
 
@@ -296,10 +295,6 @@ function logout() {
   color: #38bdf8;
   border-bottom-color: #38bdf8;
   background: #14243a;
-}
-
-.nav-button span {
-  font-size: 17px;
 }
 
 main {

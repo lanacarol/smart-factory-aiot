@@ -625,7 +625,7 @@ onUnmounted(() => {
 
         <article class="panel ai-card">
           <div class="ai-label">
-            <span>🧠 Saúde estimada do motor</span>
+            <span>Saúde estimada do motor</span>
             <span
               class="motor-badge"
               :class="aiStatusClass"
@@ -685,7 +685,7 @@ onUnmounted(() => {
 
         <article class="panel ai-card">
           <div class="ai-label">
-            <span>🔎 Diagnóstico preditivo</span>
+            <span>Diagnóstico preditivo</span>
             <span class="ai-tag">Modelo v1.0.0</span>
           </div>
 
@@ -789,7 +789,7 @@ onUnmounted(() => {
 
         <article class="panel device">
           <div class="device-top">
-            <div class="device-icon">⚙️</div>
+            <div class="device-icon">Atuador remoto</div>
             <span
               class="status"
               :class="conveyorOnline && conveyor ? 'on' : 'off'"
@@ -832,7 +832,7 @@ onUnmounted(() => {
 
         <article class="panel device">
           <div class="device-top">
-            <div class="device-icon">💨</div>
+            <div class="device-icon">Atuador automático</div>
             <span
               class="status"
               :class="fanOnline && fan ? 'on' : 'off'"
@@ -1221,7 +1221,11 @@ h3 {
 }
 
 .device-icon {
-  font-size: 30px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #64748b;
 }
 
 .status {

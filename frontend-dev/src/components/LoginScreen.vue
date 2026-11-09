@@ -83,7 +83,7 @@ async function handleLogin() {
     <div class="login-card">
 
       <div class="brand">
-        <div class="brand-icon">⚙️</div>
+        <div class="brand-icon">SF</div>
         <span>SMART FACTORY AIoT</span>
       </div>
 
@@ -192,7 +192,10 @@ async function handleLogin() {
   justify-content: center;
   border-radius: 12px;
   background: #173956;
-  font-size: 23px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #7dd3fc;
 }
 
 h1 {
