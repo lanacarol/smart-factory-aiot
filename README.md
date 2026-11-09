@@ -227,6 +227,33 @@ O arquivo `.env` contém informações sensíveis e não deve ser enviado ao Git
 
 ### Subir tudo com um único comando
 
+Na raiz do projeto (só precisa de Docker Desktop e Node.js):
+
+```powershell
+npm run dev
+```
+
+O script [`scripts/dev.mjs`](scripts/dev.mjs) faz tudo em sequência:
+
+1. Cria o `.env` a partir do `.env.example` com senhas aleatórias (se não existir) e completa variáveis faltantes (`JWT_SECRET_DEV`, `OLLAMA_MODEL`).
+2. Abre o Docker Desktop se ele estiver parado e aguarda ficar pronto.
+3. Gera `infra/mosquitto/passwords` a partir das senhas MQTT do `.env` (se não existir).
+4. Sobe todos os containers (`docker-compose.yml` + `docker-compose.dev.yml`).
+5. Instala as dependências do `frontend-dev` (se faltar) e inicia o Vite com recarga automática em http://localhost:5173.
+
+`Ctrl+C` encerra o Vite e para os containers (os dados são mantidos).
+
+| Comando | Ação |
+|---|---|
+| `npm run dev` | Sobe tudo + frontend com hot reload |
+| `npm run up` | Sobe só os containers |
+| `npm run logs` | Logs dos containers |
+| `npm run ps` | Estado dos containers |
+| `npm run stop` | Para os containers |
+| `npm run down` | Remove os containers |
+
+Equivalente manual, sem o script:
+
 ```powershell
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```

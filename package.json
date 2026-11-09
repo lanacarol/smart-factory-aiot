@@ -1,0 +1,19 @@
+{
+  "name": "smart-factory-aiot",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Orquestrador: sobe toda a Smart Factory (Docker + frontend) com um unico comando.",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "up": "node scripts/dev.mjs --no-frontend",
+    "stop": "docker compose -f docker-compose.yml -f docker-compose.dev.yml stop",
+    "down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
+    "logs": "docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f --tail 50",
+    "ps": "docker compose -f docker-compose.yml -f docker-compose.dev.yml ps"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
+
