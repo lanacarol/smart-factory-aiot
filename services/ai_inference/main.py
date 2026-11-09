@@ -298,6 +298,15 @@ def conectar_rabbitmq():
 # ==========================================
 
 def main():
+    # Na primeira execucao o worker ai-jobs ainda esta treinando:
+    # aguarda os modelos em vez de encerrar com erro.
+    while not all(
+        (MODEL_DIR / name).is_file()
+        for name in ("rul_model.joblib", "health_model.joblib", "metadata.json")
+    ):
+        logging.info("Aguardando modelos treinados em %s ...", MODEL_DIR)
+        time.sleep(10)
+
     modelos = Modelos()
 
     while True:

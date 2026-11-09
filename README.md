@@ -86,37 +86,40 @@ A manutenção preditiva utiliza modelos de aprendizado de máquina treinados co
 
 ### Dataset
 
-Foram gerados aproximadamente 1.000.000 de registros sintéticos, simulando a evolução do desgaste de 200 motores ao longo de seus ciclos operacionais.
+A base sintética é gerada pelo **Laboratório de Dados** (ou por `ai/generate_dataset.py`). O padrão são 1.000.000 de registros: 200 motores × 5.000 ciclos. Parâmetros configuráveis:
 
-Entre as variáveis utilizadas estão:
+- percentual de motores que chegam à falha no período;
+- modos de falha: geral, rolamento (vibração), superaquecimento (temperatura) e elétrica (corrente);
+- ruído dos sensores, leituras faltantes e outliers;
+- período simulado em dias, com ciclo dia/noite na temperatura ambiente;
+- semente, para reproduzir a mesma base.
 
-- Temperatura do motor.
-- Vibração.
-- Corrente elétrica.
-- Temperatura ambiente.
-- Umidade.
-- Estado operacional.
-- Quantidade de ciclos.
+### Atributos (código único)
+
+`ai/features.py` é usado **no treino e na inferência em tempo real**, então os dois calculam os atributos da mesma forma. Há dois conjuntos:
+
+- **instant** (modelo 1.0.0): leituras do instante + contador de ciclos. O contador zera quando o simulador reinicia, e o modelo acabava "lendo o relógio" em vez dos sintomas.
+- **window** (padrão desde a 1.1.0): leituras do instante + **janelas do passado** (média, desvio e tendência das últimas 20 leituras) de temperatura, vibração e corrente, sem o contador de ciclos.
 
 ### Modelos
 
-Foram treinados dois modelos baseados em HistGradientBoostingRegressor:
+Dois modelos `HistGradientBoostingRegressor`:
 
-**Modelo RUL**
+- **RUL**: vida útil restante do motor, em ciclos.
+- **Health**: percentual de saúde do equipamento.
 
-Estima a vida útil restante do motor em ciclos.
+O treino roda pela tela **Treinamento** (ou `ai/train_models.py`). Cada treino gera uma nova versão (1.1.0, 1.2.0...) e a inferência passa a usar o modelo novo **sem reiniciar**, ao detectar a mudança em `ai/models/metadata.json`.
 
-**Modelo Health**
+### Resultados obtidos (versão 1.2.0, atributos com janelas)
 
-Estima o percentual de saúde do equipamento.
-
-### Resultados obtidos
-
-| Métrica | Modelo RUL | Modelo Health |
+| Métrica (teste) | Modelo RUL | Modelo Health |
 |---|---:|---:|
-| MAE | 209,81 ciclos | 2,04 pontos percentuais |
-| RMSE | 262,70 ciclos | 2,78 pontos percentuais |
-| R² | 0,9666 | 0,9917 |
+| MAE | 561,74 ciclos | 2,91 pontos percentuais |
+| RMSE | 793,66 ciclos | 4,11 pontos percentuais |
+| R² | 0,807 | 0,982 |
+| MAE da base (prevê sempre a média) | 1.502,33 ciclos | 26,85 pontos percentuais |
+
+As variáveis mais importantes passaram a ser a **média da vibração** e a **média da corrente**, ou seja, os sintomas do desgaste. A RUL ficou menos precisa que na versão 1.0.0 (R² 0,97), que usava o contador de ciclos: sem ele, a vida restante precisa ser inferida só pelos sintomas, o que é mais difícil, mas não depende mais do relógio do simulador.
 
 Os dados foram separados por motores distintos nos conjuntos de treinamento, validação e teste, para avaliar a generalização a equipamentos não utilizados no treinamento.
 
@@ -144,6 +147,18 @@ O cartão **Teste de falha do motor** no dashboard (perfis admin e operator) env
 - **Registrar manutenção**: encerra a falha e zera o desgaste.
 
 Bancos criados antes desta função precisam da migração `infra/postgres/migrations/001-motor-commands.sql`, que libera as novas ações na tabela `command_history`.
+
+### Telas de IA e cadastro
+
+- **Insights**: saúde e vida útil ao longo do tempo, alertas abertos e resolvidos, recomendação de manutenção e os botões de injeção de falha e manutenção.
+- **Laboratório de Dados**: configura a base sintética e acompanha a geração (fila `q.jobs.generate`).
+- **Treinamento**: modelo em uso, métricas comparadas à base, gráfico previsto × real, importância das variáveis e disparo de treino com progresso (fila `q.jobs.train`).
+- **Dispositivos**: cadastro, edição, desativação e exclusão de equipamentos (perfil admin), com registro em `audit_logs`.
+- **Dashboard**: os gráficos abrem com o histórico do InfluxDB e permitem ver 15 min, 1 h, 6 h ou 24 h.
+
+Os jobs são executados pelo serviço `ai-jobs`, um por vez. O andamento volta pelo RabbitMQ (`job.status.*`) e fica na tabela `ai_jobs`.
+
+Os alertas têm **histerese**: o status previsto precisa se repetir em 3 previsões seguidas para abrir, mudar ou resolver um alerta, evitando alarmes piscando por ruído.
 
 ### Assistente com LLM local
 
@@ -210,66 +225,55 @@ O arquivo `.env` contém informações sensíveis e não deve ser enviado ao Git
 
 **Atenção:** os usuários e as senhas do Mosquitto também precisam corresponder à configuração de autenticação em `infra/mosquitto`.
 
-### Gerar os dados e treinar a IA
-
-Crie um ambiente virtual Python:
+### Subir tudo com um único comando
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
-Instale as dependências necessárias:
+Na primeira execução:
+
+- o PostgreSQL cria as tabelas (`schema.sql`) e os equipamentos (`seed.sql`);
+- o worker `ai-jobs` percebe que não há modelo treinado, **gera a base e treina** sozinho (cerca de 2 a 3 minutos); a inferência aguarda o modelo;
+- a API baixa o modelo do assistente (`llama3.2:3b`, cerca de 2 GB) para o volume `ollama_data`.
+
+Crie os usuários de login do ambiente de desenvolvimento (as senhas são pedidas no terminal, mínimo de 12 caracteres):
 
 ```powershell
-python -m pip install numpy pandas scikit-learn joblib matplotlib
+docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm -v "${PWD}/services/api/seed_users.py:/app/seed_users.py" api-dev python seed_users.py
 ```
 
-Gere o dataset sintético:
+Acesse **http://localhost:8080**.
+
+Recomenda-se pelo menos 8 GB de memória para o Docker/WSL2.
+
+### Bancos criados antes destas funções
+
+Aplique as migrações em `infra/postgres/migrations` (comandos do motor e tabela de jobs de IA):
 
 ```powershell
-python ai/generate_dataset.py --motors 200 --cycles 5000 --seed 42
+Get-Content infra/postgres/migrations/001-motor-commands.sql | docker compose exec -T postgres psql -U factory_app -d smart_factory_dev
+Get-Content infra/postgres/migrations/002-ai-jobs.sql | docker compose exec -T postgres psql -U factory_app -d smart_factory_dev
 ```
 
-Treine os modelos:
+### Desenvolvimento do frontend (opcional)
+
+Para editar as telas com recarga automática:
 
 ```powershell
-python ai/train_models.py
-```
-
-Os arquivos serão gerados em `ai/models`:
-
-- `rul_model.joblib`
-- `health_model.joblib`
-- `metadata.json`
-
-Os modelos treinados não estão incluídos no repositório e precisam ser gerados antes de iniciar o serviço de inferência.
-
-### Inicializar os serviços
-
-Na pasta principal do projeto:
-
-```powershell
-docker compose up -d --build
-```
-
-Na primeira inicialização de um banco PostgreSQL vazio, os arquivos `schema.sql` e `seed.sql` criam automaticamente as tabelas e os equipamentos.
-
-Na primeira vez, a API também baixa o modelo do assistente (`llama3.2:3b`, cerca de 2 GB) para o volume `ollama_data`. O progresso aparece na aba Assistente e em `GET /api/assistant/status`.
-
-### Inicializar o frontend
-
-Em outro terminal:
-
-```powershell
-cd frontend
+cd frontend-dev
 npm install
 npm run dev
 ```
 
-Acesse:
+Acesse http://localhost:5174.
 
-http://localhost:5173
+### Gerar dados e treinar pela linha de comando (opcional)
+
+```powershell
+python ai/generate_dataset.py --motors 200 --cycles 5000 --failure-modes geral,rolamento,superaquecimento,eletrica
+python ai/train_models.py --window-features
+```
 
 ## 9. Endpoints principais
 
@@ -286,6 +290,13 @@ http://localhost:5173
 | `POST /api/motor/command` | Injeção de falha (`INJECT_FAULT`) ou manutenção (`MAINTENANCE`) do motor |
 | `GET /api/assistant/status` | Estado do LLM local (baixando, carregando, pronto) |
 | `POST /api/assistant/chat` | Pergunta ao assistente (resposta em streaming) |
+| `GET /api/insights` | Histórico de saúde/RUL, alertas e ações do motor |
+| `GET /api/history?device_id=&period=` | Histórico de sensores no InfluxDB (15m, 1h, 6h, 24h) |
+| `GET /api/model/info` | Modelo em uso: versão, métricas, importância, previsto × real |
+| `POST /api/jobs/generate` | Enfileira a geração da base (`q.jobs.generate`) |
+| `POST /api/jobs/train` | Enfileira um treino (`q.jobs.train`) |
+| `GET /api/jobs` | Jobs de IA e seu andamento |
+| `POST/PUT/DELETE /api/devices` | Cadastro de dispositivos (admin) |
 | `WS /ws/factory` | Atualizações em tempo real |
 
 Documentação interativa da API:
@@ -296,7 +307,8 @@ http://localhost:8000/docs
 
 | Serviço | Endereço local |
 |---|---|
-| Dashboard | http://localhost:5173 |
+| Frontend (login e todas as telas) | http://localhost:8080 |
+| API de desenvolvimento (com login) | http://localhost:8001/docs |
 | FastAPI | http://localhost:8000 |
 | Swagger | http://localhost:8000/docs |
 | RabbitMQ Management | http://localhost:15672 |

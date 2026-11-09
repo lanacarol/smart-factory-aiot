@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 
 from collections import deque
 from pathlib import Path
@@ -169,7 +170,48 @@ def run_job(connection, channel, job):
         logging.error("Job %s falhou (codigo %s)", job["job_id"], code)
 
 
+# Parametros padrao da primeira execucao (iguais aos da interface).
+BOOTSTRAP_JOBS = [
+    ("generate", {
+        "motors": 200, "cycles": 5000, "seed": 42,
+        "failure_rate": 70, "noise": 1.0,
+        "failure_modes": ["geral", "rolamento", "superaquecimento", "eletrica"],
+        "missing_percent": 1, "outlier_percent": 0.8, "days": 30,
+    }),
+    ("train", {
+        "max_iter": 120, "learning_rate": 0.08, "max_leaf_nodes": 20,
+        "train_rows": 160000, "window_features": True,
+    }),
+]
+
+
+def bootstrap(connection, channel):
+    """Primeira execucao (sem modelo treinado): gera a base e treina,
+    para o projeto subir com um unico docker compose up."""
+
+    if (AI_DIR / "models" / "metadata.json").exists():
+        return
+
+    logging.info("Nenhum modelo encontrado: gerando base e treinando...")
+
+    for job_type, params in BOOTSTRAP_JOBS:
+        if job_type == "generate" and (
+            AI_DIR / "datasets" / "factory_synthetic.csv"
+        ).exists():
+            continue
+
+        job = {
+            "job_id": str(uuid.uuid4()),
+            "job_type": job_type,
+            "params": params,
+            "requested_by": "inicializacao",
+        }
+        run_job(connection, channel, job)
+
+
 def main():
+    bootstrapped = False
+
     while True:
         connection = None
 
@@ -204,6 +246,10 @@ def main():
                 )
 
             channel.basic_qos(prefetch_count=1)
+
+            if not bootstrapped:
+                bootstrap(connection, channel)
+                bootstrapped = True
 
             def processar(ch, method, properties, body):
                 try:
