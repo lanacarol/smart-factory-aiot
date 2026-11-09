@@ -153,7 +153,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="assistant">
+  <section class="assistant-panel">
     <div class="assistant-header">
       <div>
         <h2>Assistente da fábrica</h2>
@@ -228,7 +228,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.assistant {
+.assistant-panel {
   background: #111a2e;
   border: 1px solid #1e293b;
   border-radius: 18px;
